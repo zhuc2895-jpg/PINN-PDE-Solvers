@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinn-pde-solvers"
+version = "0.1.0"
+description = "Physics-Informed Neural Networks for classic PDEs, in PyTorch"
+requires-python = ">=3.8"
+dependencies = ["torch", "numpy", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["pinn", "pinn.problems"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

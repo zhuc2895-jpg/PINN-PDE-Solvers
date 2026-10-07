@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1010" viewBox="0 0 1400 1010" font-family="'Microsoft YaHei','PingFang SC','Segoe UI',sans-serif">
+<defs>
+  <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L7,3.2 L0,6.4 z" fill="#94a3b8"/>
+  </marker>
+</defs>
+<rect width="1400" height="1010" fill="#ffffff"/>
+
+<!-- ===== Title ===== -->
+<text x="700" y="42" text-anchor="middle" font-size="27" font-weight="700" fill="#0f172a">PINN-PDE-Solvers · 架构框图</text>
+<text x="700" y="68" text-anchor="middle" font-size="14.5" fill="#64748b">方案 B「问题即插件」：唯一接缝 = PDE 数学；网络 / 自动微分 / 采样 / 训练循环 / 绘图全部下沉为共享实现</text>
+<rect x="270" y="82" width="860" height="30" rx="15" fill="#fff1f2" stroke="#fda4af"/>
+<text x="700" y="102" text-anchor="middle" font-size="13" fill="#9f1239">现状：4 份自包含脚本 → 重复 MLP ×4、autograd 样板 ×21、训练循环 ×4、采样 ×4、绘图 ×4</text>
+
+<!-- ===== 1. Entry ===== -->
+<text x="60" y="146" font-size="15" font-weight="700" fill="#334155">① 入口 / CLI —— 保留四个自包含脚本入口（运行体验不变）</text>
+
+<rect x="60" y="158" width="305" height="56" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="212" y="182" text-anchor="middle" font-size="13" font-family="Consolas,monospace" fill="#312e81">pinn_2d_poisson.py</text>
+<text x="212" y="201" text-anchor="middle" font-size="12" fill="#64748b">2D 泊松 · 齐次 Dirichlet</text>
+
+<rect x="385" y="158" width="305" height="56" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="537" y="182" text-anchor="middle" font-size="12.5" font-family="Consolas,monospace" fill="#312e81">pinn_2d_convection_diffusion.py</text>
+<text x="537" y="201" text-anchor="middle" font-size="12" fill="#64748b">2D 对流–扩散 · Pe≈10</text>
+
+<rect x="710" y="158" width="305" height="56" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="862" y="182" text-anchor="middle" font-size="13" font-family="Consolas,monospace" fill="#312e81">pinn_2d_navier_stokes.py</text>
+<text x="862" y="201" text-anchor="middle" font-size="12" fill="#64748b">顶盖驱动方腔 · 3 输出 (u,v,p)</text>
+
+<rect x="1035" y="158" width="305" height="56" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="1187" y="182" text-anchor="middle" font-size="13" font-family="Consolas,monospace" fill="#312e81">pinn_burgers_sample.py</text>
+<text x="1187" y="201" text-anchor="middle" font-size="12" fill="#64748b">1D 粘性 Burgers · 时变</text>
+
+<line x1="700" y1="222" x2="700" y2="258" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== 2. Problem plugins ===== -->
+<text x="60" y="250" font-size="15" font-weight="700" fill="#334155">② 问题插件层 —— 每个 PDE 只描述数学（30–60 行）</text>
+
+<rect x="60" y="264" width="305" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="212" y="290" text-anchor="middle" font-size="15" font-weight="700" fill="#065f46">Poisson2D</text>
+<text x="212" y="314" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">sample() · losses()</text>
+<text x="212" y="334" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">loss_weights() · exact()</text>
+
+<rect x="385" y="264" width="305" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="537" y="290" text-anchor="middle" font-size="15" font-weight="700" fill="#065f46">ConvectionDiffusion2D</text>
+<text x="537" y="314" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">一阶 + 二阶残差</text>
+<text x="537" y="334" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">terms: pde, bc</text>
+
+<rect x="710" y="264" width="305" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="862" y="290" text-anchor="middle" font-size="15" font-weight="700" fill="#065f46">LidDrivenCavity</text>
+<text x="862" y="314" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">3 输出 (u,v,p)，4 壁面</text>
+<text x="862" y="334" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">terms: cont, mom_x, mom_y, bc</text>
+
+<rect x="1035" y="264" width="305" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="1187" y="290" text-anchor="middle" font-size="15" font-weight="700" fill="#065f46">Burgers1D</text>
+<text x="1187" y="314" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">时变：IC + BC</text>
+<text x="1187" y="334" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#047857">terms: pde, bc, ic</text>
+
+<line x1="700" y1="356" x2="700" y2="366" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== Seam ===== -->
+<rect x="60" y="368" width="1280" height="52" rx="10" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="7 5"/>
+<text x="700" y="390" text-anchor="middle" font-size="14.5" font-weight="700" fill="#92400e">接缝 PDEProblem (Protocol)：trainer 只认 sample() · losses() · loss_weights() · exact()</text>
+<text x="700" y="409" text-anchor="middle" font-size="12" fill="#b45309">训练循环不知道自己在解什么 —— 2/3/4 个损失项、1/3 个输出、BC/IC、有无解析解，全部由该协议抹平</text>
+
+<line x1="700" y1="428" x2="700" y2="466" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== 3. Shared core ===== -->
+<text x="60" y="456" font-size="15" font-weight="700" fill="#334155">③ 共享内核 —— 公共行为只实现一次，自动对四个 PDE 生效</text>
+
+<rect x="60" y="474" width="560" height="112" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+<text x="80" y="500" font-size="15" font-weight="700" fill="#1e40af">trainer.py　·　编排者</text>
+<text x="80" y="524" font-size="12.5" font-family="Consolas,monospace" fill="#1d4ed8">train(problem, model, config)</text>
+<text x="80" y="546" font-size="12" fill="#475569">优化器 Adam + StepLR　·　history 累积　·　resample_every 重采样开关</text>
+<text x="80" y="566" font-size="12" fill="#475569">接收未加权损失项 → Σ w·loss → total → backward → step</text>
+
+<rect x="640" y="474" width="225" height="112" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="752" y="500" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e40af">model.py</text>
+<text x="752" y="524" text-anchor="middle" font-size="11.5" font-family="Consolas,monospace" fill="#1d4ed8">MLP(width, depth,</text>
+<text x="752" y="541" text-anchor="middle" font-size="11.5" font-family="Consolas,monospace" fill="#1d4ed8">activation, n_fourier)</text>
+<text x="752" y="566" text-anchor="middle" font-size="11.5" fill="#475569">FourierFeatures / SIREN init</text>
+
+<rect x="880" y="474" width="225" height="112" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="992" y="500" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e40af">derivatives.py</text>
+<text x="992" y="526" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#1d4ed8">d() · grad_all()</text>
+<text x="992" y="545" text-anchor="middle" font-size="12" font-family="Consolas,monospace" fill="#1d4ed8">laplacian()</text>
+<text x="992" y="568" text-anchor="middle" font-size="11.5" fill="#475569">21 处 autograd 样板 → 3 个函数</text>
+
+<rect x="1120" y="474" width="220" height="112" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="1230" y="500" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e40af">sampling.py</text>
+<text x="1230" y="526" text-anchor="middle" font-size="11.5" font-family="Consolas,monospace" fill="#1d4ed8">uniform()</text>
+<text x="1230" y="545" text-anchor="middle" font-size="11.5" font-family="Consolas,monospace" fill="#1d4ed8">unit_square_boundary()</text>
+<text x="1230" y="564" text-anchor="middle" font-size="11.5" font-family="Consolas,monospace" fill="#1d4ed8">strip_boundary()</text>
+
+<line x1="700" y1="594" x2="700" y2="636" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== 4. Training data flow ===== -->
+<text x="60" y="626" font-size="15" font-weight="700" fill="#334155">④ 训练循环数据流（train() 内部，每 epoch 一轮）</text>
+
+<rect x="61" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="160" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">采样 sample()</text>
+<text x="160" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">Data{interior,boundary,initial}</text>
+
+<rect x="277" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="376" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">前向 model(coords)</text>
+<text x="376" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">→ 场 u（或 u,v,p）</text>
+
+<rect x="493" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="592" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">自动微分</text>
+<text x="592" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">d() / grad_all() / laplacian()</text>
+
+<rect x="709" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="808" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">残差 losses()</text>
+<text x="808" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">{pde, bc, ic, cont, …}</text>
+
+<rect x="925" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="1024" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">加权求和</text>
+<text x="1024" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">Σ w·loss → total</text>
+
+<rect x="1141" y="644" width="198" height="72" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+<text x="1240" y="672" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">反向 + 更新</text>
+<text x="1240" y="694" text-anchor="middle" font-size="10.5" fill="#64748b">total.backward(); Adam.step()</text>
+
+<line x1="259" y1="680" x2="275" y2="680" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="475" y1="680" x2="491" y2="680" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="691" y1="680" x2="707" y2="680" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="907" y1="680" x2="923" y2="680" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="1123" y1="680" x2="1139" y2="680" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<line x1="700" y1="724" x2="700" y2="766" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== 5. Model architecture ===== -->
+<text x="60" y="756" font-size="15" font-weight="700" fill="#334155">⑤ 网络架构（MLP）—— 唯一被实测对比过的环节</text>
+
+<rect x="60" y="774" width="236" height="72" rx="9" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+<text x="178" y="804" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">坐标输入</text>
+<text x="178" y="824" text-anchor="middle" font-size="11" font-family="Consolas,monospace" fill="#6d28d9">(x, y) 或 (x, t)</text>
+
+<rect x="321" y="774" width="236" height="72" rx="9" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+<text x="439" y="800" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">Fourier 特征（可选）</text>
+<text x="439" y="822" text-anchor="middle" font-size="10.5" font-family="Consolas,monospace" fill="#6d28d9">[sin(2πBx), cos(2πBx)]</text>
+
+<rect x="582" y="774" width="236" height="72" rx="9" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+<text x="700" y="800" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">隐藏层 × 4</text>
+<text x="700" y="822" text-anchor="middle" font-size="10.5" font-family="Consolas,monospace" fill="#6d28d9">Linear(64) + tanh</text>
+
+<rect x="843" y="774" width="236" height="72" rx="9" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+<text x="961" y="804" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">线性输出头</text>
+<text x="961" y="824" text-anchor="middle" font-size="11" font-family="Consolas,monospace" fill="#6d28d9">Linear → 场</text>
+
+<rect x="1104" y="774" width="236" height="72" rx="9" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+<text x="1222" y="804" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">输出场</text>
+<text x="1222" y="824" text-anchor="middle" font-size="11" font-family="Consolas,monospace" fill="#6d28d9">u 或 (u, v, p)</text>
+
+<line x1="296" y1="810" x2="317" y2="810" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="557" y1="810" x2="578" y2="810" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="818" y1="810" x2="839" y2="810" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="1079" y1="810" x2="1100" y2="810" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<line x1="700" y1="854" x2="700" y2="896" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+<!-- ===== 6. Outputs ===== -->
+<text x="60" y="886" font-size="15" font-weight="700" fill="#334155">⑥ 输出 / 评测层 —— 仓库里最值钱的部分，重构时原样保留</text>
+
+<rect x="60" y="904" width="408" height="72" rx="9" fill="#fdf2f8" stroke="#ec4899" stroke-width="1.4"/>
+<text x="264" y="932" text-anchor="middle" font-size="13" font-weight="700" fill="#9d174d">history</text>
+<text x="264" y="954" text-anchor="middle" font-size="11" fill="#64748b">各损失项逐 epoch 曲线（不含误差）</text>
+
+<rect x="496" y="904" width="408" height="72" rx="9" fill="#fdf2f8" stroke="#ec4899" stroke-width="1.4"/>
+<text x="700" y="932" text-anchor="middle" font-size="13" font-weight="700" fill="#9d174d">*_result.png</text>
+<text x="700" y="954" text-anchor="middle" font-size="11" fill="#64748b">PINN 预测 vs 解析解 对比图</text>
+
+<rect x="932" y="904" width="408" height="72" rx="9" fill="#fdf2f8" stroke="#ec4899" stroke-width="1.4"/>
+<text x="1136" y="932" text-anchor="middle" font-size="13" font-weight="700" fill="#9d174d">相对 L2 误差 / 基准</text>
+<text x="1136" y="954" text-anchor="middle" font-size="11" fill="#64748b">解析解 &amp; Ghia(1982) 中心线表（loss ≠ 误差）</text>
+
+<!-- footnote -->
+<text x="700" y="998" text-anchor="middle" font-size="11" fill="#94a3b8">对应实现 explore/pinn_proto/　·　详见 docs/architecture-exploration.md</text>
+</svg>
