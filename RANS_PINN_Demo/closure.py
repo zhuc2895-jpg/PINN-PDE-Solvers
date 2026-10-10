@@ -33,12 +33,17 @@ A_PLUS = 26.0
 #: the mixing-length term ``y (1 - y)`` vanishes but the real profile does not.
 C_CORE = 0.06
 
-#: The truth's damping law differs from the baseline's in *both* of its
-#: parameters.  The exponent is what breaks the ``y**3`` asymptote; the constant
-#: sets how far out the damping keeps biting.  Changing only the exponent moves
-#: a sliver of the profile and a fit could hide it.
-TRUTH_DAMPING_A_PLUS = 45.0
-TRUTH_DAMPING_EXPONENT = 2.6
+#: The truth's near-wall damping exponent.  The baseline's exponent of 2 is what
+#: produces its ``y**3`` asymptote, so a different exponent breaks that
+#: asymptote while leaving the (standard, physical) van Driest constant alone.
+#:
+#: It sits *below* 2 on purpose, and the reason is physical rather than
+#: aesthetic: the baseline already over-predicts ``U+`` by about 8% against
+#: channel DNS, i.e. its ``nu_t`` is too small near the wall, so a reference
+#: worth correcting towards has to carry *more* near-wall eddy viscosity.  An
+#: exponent above 2 goes the other way and lands ~50% away from DNS -- a
+#: "truth" no correction should be chasing.
+TRUTH_DAMPING_EXPONENT = 1.5
 
 #: Fractional drift of the log-layer slope per e-fold of ``Re_tau`` away from
 #: ``TRUTH_KAPPA_REF``.
@@ -131,8 +136,8 @@ class TruthClosure:
     Two deviations from the baseline, each switchable, each deliberately one a
     constant multiplier cannot absorb:
 
-    * ``near_wall_deviation`` gives the truth a different damping law, which
-      breaks the ``y**3`` asymptote the baseline's exponent of 2 produces.
+    * ``near_wall_deviation`` gives the truth a different damping exponent,
+      which breaks the ``y**3`` asymptote the baseline's exponent of 2 produces.
     * ``log_layer_deviation`` lets the log-layer slope drift with ``Re_tau``,
       windowed to the log layer so it is a change of *shape*, not of scale.
 
@@ -144,14 +149,12 @@ class TruthClosure:
         self,
         near_wall_deviation: bool = True,
         log_layer_deviation: bool = True,
-        damping_a_plus: float = TRUTH_DAMPING_A_PLUS,
         damping_exponent: float = TRUTH_DAMPING_EXPONENT,
         kappa_drift: float = TRUTH_KAPPA_DRIFT,
         kappa_ref: float = TRUTH_KAPPA_REF,
     ):
         self.near_wall_deviation = near_wall_deviation
         self.log_layer_deviation = log_layer_deviation
-        self.damping_a_plus = damping_a_plus
         self.damping_exponent = damping_exponent
         self.kappa_drift = kappa_drift
         self.kappa_ref = kappa_ref
@@ -173,14 +176,9 @@ class TruthClosure:
         shear: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         y_plus = y * Re_tau
-        if self.near_wall_deviation:
-            a_plus = self.damping_a_plus
-            exponent = self.damping_exponent
-        else:
-            a_plus = A_PLUS
-            exponent = BASELINE_DAMPING_EXPONENT
+        exponent = self.damping_exponent if self.near_wall_deviation else BASELINE_DAMPING_EXPONENT
         return _mixing_shape(y, self._effective_kappa(y_plus, Re_tau)) * _damping(
-            y_plus, exponent=exponent, a_plus=a_plus
+            y_plus, exponent=exponent
         )
 
     def _effective_kappa(self, y_plus: torch.Tensor, Re_tau: float):

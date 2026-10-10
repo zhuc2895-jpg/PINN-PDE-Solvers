@@ -11,5 +11,13 @@ interchangeable under ablation, coupling and evaluation.
 """
 
 from .closure import BaselineClosure, Closure, TruthClosure
+from .solver import SolveResult, solve_channel, wall_clustered_grid
 
-__all__ = ["Closure", "BaselineClosure", "TruthClosure"]
+__all__ = [
+    "Closure",
+    "BaselineClosure",
+    "TruthClosure",
+    "SolveResult",
+    "solve_channel",
+    "wall_clustered_grid",
+]

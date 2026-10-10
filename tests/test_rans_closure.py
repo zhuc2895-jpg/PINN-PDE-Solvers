@@ -12,6 +12,7 @@ import math
 import torch
 
 from RANS_PINN_Demo.closure import KAPPA, BaselineClosure, TruthClosure
+from RANS_PINN_Demo.solver import solve_channel
 
 RE_TAU_TRAIN = (180.0, 395.0)
 RE_TAU_TEST = 590.0
@@ -88,7 +89,7 @@ def test_truth_breaks_the_near_wall_y_cubed_asymptote():
     baseline = _near_wall_log_log_slope(BaselineClosure(), 395.0)
     truth = _near_wall_log_log_slope(TruthClosure(log_layer_deviation=False), 395.0)
     assert abs(baseline - 3.0) < 0.05
-    assert truth > baseline + 0.3
+    assert abs(truth - 3.0) > 0.3
 
 
 def test_log_layer_deviation_is_inert_at_the_reference_reynolds_number():
@@ -155,3 +156,19 @@ def test_closure_comparison_draws_one_panel_per_reynolds_number():
         assert all(len(ax.lines) == 2 for ax in axes)
     finally:
         plt.close(fig)
+
+def test_the_truth_stays_a_plausible_reference_profile():
+    """The synthetic truth stands in for high-fidelity data, so it has to be a
+    profile a correction could plausibly be chasing.
+
+    An early choice of the near-wall exponent put the truth ~50% above channel
+    DNS while the baseline sat ~8% above it -- i.e. the "reference" was far
+    worse than the model under test, which inverts the whole argument.  This is
+    the guard for that: the gap has to be a correction's worth, not a rewrite.
+    """
+    baseline = BaselineClosure()
+    truth = TruthClosure()
+    for Re_tau in (180.0, 395.0, 590.0):
+        U_base = solve_channel(baseline, Re_tau).U[-1].item()
+        U_truth = solve_channel(truth, Re_tau).U[-1].item()
+        assert abs(U_truth - U_base) / U_base < 0.25

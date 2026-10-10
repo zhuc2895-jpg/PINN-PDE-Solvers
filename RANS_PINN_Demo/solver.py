@@ -1,0 +1,131 @@
+"""The coupling solver: a fixed point on ``nu_t``, then a quadrature for ``U``.
+
+Non-dimensionalisation is the same as :mod:`RANS_PINN_Demo.closure`: ``h = 1``,
+``u_tau = 1``, ``nu = 1 / Re_tau``.  Integrating the total-stress relation from
+the wall gives
+
+    dU/dy = u_tau**2 * (1 - y/h) / (nu + nu_t)
+
+so ``U`` is a cumulative quadrature *once ``nu_t`` is known*.  The fixed point
+is needed because a learned closure may depend on the local shear, which depends
+on ``U``, which depends on ``nu_t``: a closure that depends only on ``y`` would
+make this loop a fiction, and the loop is the thing H3 is about (see
+``docs/adr/0001-solver-in-the-loop-training.md``).
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+import torch
+
+from .closure import Closure
+
+__all__ = ["SolveResult", "solve_channel", "wall_clustered_grid", "U_TAU", "H"]
+
+U_TAU = 1.0
+H = 1.0
+
+
+
+
+@dataclass
+class SolveResult:
+    """Everything the caller needs to judge the solve, not just the answer."""
+
+    y: torch.Tensor
+    U: torch.Tensor
+    nu_t: torch.Tensor
+    iterations: int
+    converged: bool
+    #: ``max|F(nu_t) - nu_t|`` per iteration, before relaxation.
+    residual: List[float] = field(default_factory=list)
+    #: ``max|nu_t_next - nu_t|`` per iteration -- this is what ``tol`` bounds.
+    change: List[float] = field(default_factory=list)
+
+
+def wall_clustered_grid(n: int = 801, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+    """``y = t**2``: quadratic clustering at the wall, where ``nu_t`` and
+    ``dU/dy`` both change fastest."""
+    t = torch.linspace(0.0, 1.0, n, dtype=dtype)
+    return (t**2).reshape(-1, 1)
+
+
+def _cumulative_trapezoid(f: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """``int_0^y f`` at each grid point, with the value at ``y = 0`` fixed at 0."""
+    dy = y[1:] - y[:-1]
+    segments = 0.5 * (f[1:] + f[:-1]) * dy
+    out = torch.zeros_like(f)
+    out[1:] = torch.cumsum(segments, dim=0)
+    return out
+
+
+def _shear_from(nu_t: torch.Tensor, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
+    """Wall-unit mean shear ``dU+/dy+`` implied by the current ``nu_t``."""
+    nu = 1.0 / Re_tau
+    dU_dy = U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
+    return dU_dy / Re_tau
+
+
+def _is_monotone_decreasing(residual: List[float]) -> bool:
+    """True when the whole residual history is non-increasing.
+
+    A small relative slack absorbs round-off.  Requiring the *whole* history,
+    not just the last few steps, is the point: a shrinking step size on its own
+    must never be mistaken for convergence, so an iteration that ever grew --
+    an oscillation, a limit cycle -- stays unconverged and has to be reported.
+    """
+    return all(b <= a * (1.0 + 1e-6) for a, b in zip(residual, residual[1:]))
+
+
+def solve_channel(
+    closure: Closure,
+    Re_tau: float,
+    y: Optional[torch.Tensor] = None,
+    alpha: float = 1.0,
+    tol: float = 1e-10,
+    max_iter: int = 200,
+) -> SolveResult:
+    """Iterate ``nu_t`` to a fixed point, then integrate the profile.
+
+    ``alpha`` is the under-relaxation factor: ``1.0`` takes the closure's full
+    step, smaller values damp it.  ``converged`` is False whenever the iteration
+    ran out of budget *or* the residual never settled -- the caller is never
+    handed the last iterate dressed up as an answer.
+    """
+    if not 0.0 < alpha <= 1.0:
+        raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+
+    if y is None:
+        y = wall_clustered_grid()
+    y = y.to(torch.float64)
+
+    nu_t = closure(y, Re_tau).to(torch.float64)
+    residual: List[float] = []
+    change: List[float] = []
+    converged = False
+
+    for _ in range(max_iter):
+        target = closure(y, Re_tau, shear=_shear_from(nu_t, y, Re_tau)).to(torch.float64)
+        step = target - nu_t
+        residual.append(float(step.abs().max()))
+        step = alpha * step
+        change.append(float(step.abs().max()))
+        nu_t = nu_t + step
+        if change[-1] < tol and _is_monotone_decreasing(residual):
+            converged = True
+            break
+
+    nu = 1.0 / Re_tau
+    dU_dy = U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
+    return SolveResult(
+        y=y,
+        U=_cumulative_trapezoid(dU_dy, y),
+        nu_t=nu_t,
+        iterations=len(residual),
+        converged=converged,
+        residual=residual,
+        change=change,
+    )
