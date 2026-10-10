@@ -12,7 +12,14 @@ import torch
 from pinn.model import MLP
 from pinn.trainer import TrainConfig, train
 
-from RANS_PINN_Demo.channel import DATA_BUDGETS, ChannelClosure, ChannelProblem, stratified_points
+from RANS_PINN_Demo.channel import (
+    DATA_BUDGETS,
+    MODEL_INPUTS,
+    ChannelClosure,
+    ChannelProblem,
+    _strata,
+    stratified_points,
+)
 from RANS_PINN_Demo.solver import solve_channel as run_solver
 from RANS_PINN_Demo.solver import wall_clustered_grid
 
@@ -38,7 +45,7 @@ def test_channel_problem_drives_the_shared_trainer_unchanged():
 def test_channel_problem_reports_the_protocol_attributes():
     problem = ChannelProblem()
     assert problem.name
-    assert problem.coords == ("y", "Re_tau")
+    assert problem.coords == MODEL_INPUTS
     assert problem.out_dim == 1
     assert problem.loss_weights() == {"data": 1.0}
     assert problem.exact({}) is None
@@ -61,8 +68,8 @@ def test_observations_reach_from_the_buffer_layer_to_the_centreline():
     y_plus = stratified_points(16, Re_tau).reshape(-1) * Re_tau
     assert y_plus.min() <= 3.0 + 1e-9
     assert y_plus.max() >= 0.97 * Re_tau
-    # every band between those ends is represented, not just the extremes
-    for lo, hi in ((3.0, 30.0), (30.0, 0.15 * Re_tau), (0.15 * Re_tau, 0.6 * Re_tau)):
+    # every band gets a say, not just the two extremes
+    for lo, hi in _strata(Re_tau):
         inside = ((y_plus >= lo - 1e-9) & (y_plus <= hi + 1e-9)).sum()
         assert inside >= 2
 
@@ -145,3 +152,50 @@ def test_data_only_training_reduces_the_observation_loss():
         TrainConfig(epochs=60, n_interior=16, device="cpu", verbose=False, lr=1e-2),
     )
     assert history["data"][-1] < 0.25 * history["data"][0]
+
+def test_the_observation_bands_do_not_spend_budget_on_duplicates():
+    """Adjacent bands used to share an edge, so 16 "points" were really 13 and
+    three of them carried triple weight in the loss."""
+    for Re_tau in (180.0, 395.0, 590.0):
+        for budget in DATA_BUDGETS:
+            points = stratified_points(budget, Re_tau).reshape(-1)
+            assert points.numel() == budget
+            assert len(set(points.tolist())) == budget
+
+
+def test_stratification_survives_at_the_lowest_training_reynolds_number():
+    """At Re_tau = 180 a fixed wall-unit log band inverts (30 > 0.15 * 180), which
+    silently reordered the bands. Placement now has to hold at every Re_tau."""
+    for Re_tau in (180.0, 395.0, 590.0):
+        y_plus = stratified_points(16, Re_tau).reshape(-1) * Re_tau
+        bands = _strata(Re_tau)
+        assert all(lo < hi for lo, hi in bands), bands
+        for lo, hi in bands:
+            assert ((y_plus >= lo - 1e-9) & (y_plus <= hi + 1e-9)).any()
+
+
+def test_the_model_can_be_built_straight_from_the_protocol_coords():
+    """``coords`` is the model's input layout, so the idiomatic construction --
+    ``MLP(len(problem.coords), problem.out_dim)`` -- has to be the right shape."""
+    problem = ChannelProblem()
+    model = MLP(len(problem.coords), problem.out_dim, width=8, depth=2, seed=0)
+    data = problem.sample(8, 0, 0, torch.device("cpu"))
+    assert set(problem.losses(model, data)) == {"data"}
+
+
+def test_the_inner_solve_converges_at_the_training_tolerance():
+    """The tolerance has to clear the float32 network's own precision floor.
+
+    At 1e-10 the solve burned its whole budget stalled at ~2e-9 and ``losses``
+    trained on a non-converged iterate without saying so.
+    """
+    problem = ChannelProblem()
+    model = MLP(len(problem.coords), problem.out_dim, width=16, depth=2, seed=0)
+    for Re_tau in problem.Re_taus:
+        solved = run_solver(
+            ChannelClosure(model, problem.base),
+            Re_tau,
+            max_iter=problem.solve_max_iter,
+            tol=problem.solve_tol,
+        )
+        assert solved.converged, solved.residual_norms[-3:]

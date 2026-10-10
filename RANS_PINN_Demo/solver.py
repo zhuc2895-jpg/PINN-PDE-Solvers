@@ -25,7 +25,7 @@ import torch
 
 from .closure import Closure
 
-__all__ = ["SolveResult", "solve_channel", "wall_clustered_grid", "U_TAU", "H"]
+__all__ = ["SolveResult", "solve_channel", "shear_plus", "wall_clustered_grid", "U_TAU", "H"]
 
 U_TAU = 1.0
 H = 1.0
@@ -72,6 +72,11 @@ def _du_dy(nu_t: torch.Tensor, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
     return U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
 
 
+def shear_plus(nu_t: torch.Tensor, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
+    """Wall-unit mean shear ``dU+/dy+`` implied by ``nu_t``."""
+    return _du_dy(nu_t, y, Re_tau) / Re_tau
+
+
 def _is_monotone_decreasing(residual: List[float]) -> bool:
     """True when the whole residual history is non-increasing.
 
@@ -114,7 +119,7 @@ def solve_channel(
     converged = False
 
     for _ in range(max_iter):
-        shear = _du_dy(nu_t, y, Re_tau) / Re_tau
+        shear = shear_plus(nu_t, y, Re_tau)
         target = closure(y, Re_tau, shear=shear).to(torch.float64)
         residual = target - nu_t
         step = alpha * residual
