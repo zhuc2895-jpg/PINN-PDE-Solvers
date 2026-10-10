@@ -12,6 +12,12 @@ import torch
 from pinn.model import MLP
 from pinn.trainer import TrainConfig, train
 
+from RANS_PINN_Demo.ablations import (
+    ALL_OFF,
+    AMPLITUDE_LOSS_WEIGHT,
+    RANS_LOSS_WEIGHT,
+    SMOOTH_LOSS_WEIGHT,
+)
 from RANS_PINN_Demo.channel import (
     DATA_BUDGETS,
     MODEL_INPUTS,
@@ -37,7 +43,7 @@ def test_channel_problem_drives_the_shared_trainer_unchanged():
         _model(),
         TrainConfig(epochs=3, n_interior=8, device="cpu", verbose=False),
     )
-    assert set(history) == {"data", "total"}
+    assert set(history) == {"data", "rans", "smooth", "amplitude", "total"}
     assert len(history["total"]) == 3
     assert all(v == v for v in history["total"])  # no NaN
 
@@ -47,7 +53,12 @@ def test_channel_problem_reports_the_protocol_attributes():
     assert problem.name
     assert problem.coords == MODEL_INPUTS
     assert problem.out_dim == 1
-    assert problem.loss_weights() == {"data": 1.0}
+    assert problem.loss_weights() == {
+        "data": 1.0,
+        "rans": RANS_LOSS_WEIGHT,
+        "smooth": SMOOTH_LOSS_WEIGHT,
+        "amplitude": AMPLITUDE_LOSS_WEIGHT,
+    }
     assert problem.exact({}) is None
 
 # --- observation placement ----------------------------------------------------
@@ -144,7 +155,7 @@ def test_data_only_training_reduces_the_observation_loss():
     What is being shown here is that the path from a network parameter, through
     the fixed point, to a solved profile is differentiable end to end.
     """
-    problem = ChannelProblem()
+    problem = ChannelProblem(ablation=ALL_OFF)
     model = MLP(3, 1, width=32, depth=2, seed=0)
     history = train(
         problem,
@@ -180,7 +191,7 @@ def test_the_model_can_be_built_straight_from_the_protocol_coords():
     problem = ChannelProblem()
     model = MLP(len(problem.coords), problem.out_dim, width=8, depth=2, seed=0)
     data = problem.sample(8, 0, 0, torch.device("cpu"))
-    assert set(problem.losses(model, data)) == {"data"}
+    assert set(problem.losses(model, data)) == {"data", "rans", "smooth", "amplitude"}
 
 
 def test_the_inner_solve_converges_at_the_training_tolerance():

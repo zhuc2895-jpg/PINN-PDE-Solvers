@@ -10,6 +10,7 @@ that the baseline, the synthetic truth and the learned correction are
 interchangeable under ablation, coupling and evaluation.
 """
 
+from .ablations import A1, A2, A3, ABLATIONS, ALL_OFF, AblationConfig
 from .channel import MODEL_INPUTS, ChannelClosure, ChannelProblem
 from .closure import BaselineClosure, Closure, TruthClosure
 from .solver import SolveResult, solve_channel, wall_clustered_grid
@@ -24,4 +25,10 @@ __all__ = [
     "ChannelClosure",
     "ChannelProblem",
     "MODEL_INPUTS",
+    "AblationConfig",
+    "A1",
+    "A2",
+    "A3",
+    "ALL_OFF",
+    "ABLATIONS",
 ]

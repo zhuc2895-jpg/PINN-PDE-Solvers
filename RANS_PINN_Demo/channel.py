@@ -20,7 +20,20 @@ import torch
 
 from pinn.problem import Data, PointSet
 
-from .closure import BaselineClosure, Closure, TruthClosure
+from .ablations import (
+    ABLATIONS,
+    A1,
+    A2,
+    A3,
+    ALL_OFF,
+    AMPLITUDE_LIMIT,
+    AMPLITUDE_LOSS_WEIGHT,
+    DATA_LOSS_WEIGHT,
+    RANS_LOSS_WEIGHT,
+    SMOOTH_LOSS_WEIGHT,
+    AblationConfig,
+)
+from .closure import A_PLUS, BaselineClosure, Closure, TruthClosure
 from .solver import SolveResult, shear_plus, solve_channel
 
 __all__ = [
@@ -29,6 +42,12 @@ __all__ = [
     "stratified_points",
     "MODEL_INPUTS",
     "TRAINING_RE_TAUS",
+    "AblationConfig",
+    "A1",
+    "A2",
+    "A3",
+    "ALL_OFF",
+    "ABLATIONS",
 ]
 
 #: The network's input layout, in order.  This is the problem's ``coords`` too:
@@ -51,6 +70,12 @@ DATA_BUDGETS = (8, 12, 16)
 #: the solve silently burns its whole budget failing to reach it.
 TRAINING_SOLVE_TOL = 1e-8
 SOLVE_MAX_ITER = 30
+
+#: The additive arm needs a physical scale for its network output.  The
+#: structured arm instead treats the same output as a dimensionless log
+#: correction, so the two arms keep identical network capacity while respecting
+#: their different parameterisations.
+ADDITIVE_CORRECTION_SCALE = 1e-3
 
 
 def _strata(Re_tau: float) -> Tuple[Tuple[float, float], ...]:
@@ -124,16 +149,67 @@ def _profile_at(solved: SolveResult, y: torch.Tensor) -> torch.Tensor:
 
 
 class ChannelClosure:
-    """``nu_t = nu_t_base * exp(delta)``, with ``delta`` from the network.
+    """Ablation-aware learned closure.
 
-    Multiplicative on purpose: ``delta = 0`` reproduces the baseline exactly, so
-    training starts from the model under test rather than from noise, and the
-    result is positive wherever the baseline is.
+    The structured path is ``nu_t = nu_t_base * exp(D * delta)`` with van Driest
+    damping ``D = 1 - exp(-y_plus / A_plus)``.  The base closure already carries
+    ``D**2``, so the learned factor preserves its zero wall value, its ``y**3``
+    near-wall asymptote and its finite non-zero centreline value.  At ``delta = 0``
+    the exponential is exactly one and the structured closure is bitwise equal to
+    the baseline.
+
+    A1 turns off the structural map and uses the additive arm
+    ``nu_t = nu_t_base + scale * delta`` instead.  That arm is intentionally allowed
+    to lose positivity; the point of the ablation is to test what the structure
+    buys rather than to smuggle it back in through a clamp.
     """
 
-    def __init__(self, model: torch.nn.Module, base: Optional[Closure] = None):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        base: Optional[Closure] = None,
+        *,
+        structure: bool = True,
+    ):
         self.model = model
         self.base = base if base is not None else BaselineClosure()
+        self.structure = structure
+
+    def _features(self, y: torch.Tensor, Re_tau: float, shear: Optional[torch.Tensor]) -> torch.Tensor:
+        zero_shear = torch.zeros_like(y)
+        shear = zero_shear if shear is None else shear
+        re_tau = torch.full_like(y, Re_tau / RE_TAU_SCALE)
+        return torch.cat([y, shear, re_tau], dim=1).to(
+            next(self.model.parameters()).dtype
+        )
+
+    def raw_delta(
+        self,
+        y: torch.Tensor,
+        Re_tau: float,
+        shear: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """The network output, in its native dimensionless units."""
+        delta = self.model(self._features(y, Re_tau, shear))
+        return delta.to(y.dtype)
+
+    def delta(
+        self,
+        y: torch.Tensor,
+        Re_tau: float,
+        shear: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """The correction used by this parameterisation.
+
+        The structured arm uses the raw log correction.  The additive arm scales
+        it to eddy-viscosity units before adding it to the baseline.
+        """
+        delta = self.raw_delta(y, Re_tau, shear)
+        return delta if self.structure else ADDITIVE_CORRECTION_SCALE * delta
+
+    def damping(self, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
+        """Van Driest damping for the learned factor, zero at the wall."""
+        return 1.0 - torch.exp(-(y * Re_tau) / A_PLUS)
 
     def __call__(
         self,
@@ -141,14 +217,62 @@ class ChannelClosure:
         Re_tau: float,
         shear: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        zero_shear = torch.zeros_like(y)
-        shear = zero_shear if shear is None else shear
-        re_tau = torch.full_like(y, Re_tau / RE_TAU_SCALE)
-        features = torch.cat([y, shear, re_tau], dim=1).to(
-            next(self.model.parameters()).dtype
-        )
-        delta = self.model(features).to(y.dtype)
-        return self.base(y, Re_tau) * torch.exp(delta)
+        base = self.base(y, Re_tau)
+        delta = self.delta(y, Re_tau, shear)
+        if not self.structure:
+            return base + delta
+        return base * torch.exp(self.damping(y, Re_tau) * delta)
+
+
+def _central_difference(field: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Second-order central difference on a non-uniform grid."""
+    return (field[2:] - field[:-2]) / (y[2:] - y[:-2])
+
+
+def _rans_residual(solved: SolveResult, Re_tau: float) -> torch.Tensor:
+    """Mean-square discrete residual of the steady channel momentum equation.
+
+    This intentionally differentiates the *solved* profile rather than reading
+    ``_du_dy`` back out of the solver.  Reading the analytic stress relation
+    would make the residual identically zero by construction; differentiating
+    the quadrature exposes the coarse-grid momentum error that the RANS axis is
+    supposed to constrain.
+    """
+    nu = 1.0 / Re_tau
+    shear = _central_difference(solved.U, solved.y)
+    flux = (nu + solved.nu_t[1:-1]) * shear
+    residual = _central_difference(flux, solved.y[1:-1]) + 1.0
+    return (residual**2).mean()
+
+
+def _smoothness_penalty(delta: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """``mean(|d delta / dy|**2)`` on the non-uniform solve grid."""
+    slope = torch.diff(delta, dim=0) / torch.diff(y, dim=0)
+    return (slope**2).mean()
+
+
+def _amplitude_penalty(delta: torch.Tensor, limit: float) -> torch.Tensor:
+    """Soft bound: zero inside ``[-limit, limit]``, quadratic outside it."""
+    excess = torch.relu(delta.abs() - limit)
+    return (excess**2).mean()
+
+
+def _correction_field(
+    closure: ChannelClosure,
+    y: torch.Tensor,
+    Re_tau: float,
+    shear: torch.Tensor,
+) -> torch.Tensor:
+    """The correction actually applied to the closure.
+
+    The structured arm applies ``D * delta`` inside the exponential, so that is
+    the field whose smoothness and amplitude are physically meaningful.  The
+    additive A1 arm has no damping factor.
+    """
+    delta = closure.delta(y, Re_tau, shear)
+    if closure.structure:
+        return closure.damping(y, Re_tau) * delta
+    return delta
 
 
 class ChannelProblem:
@@ -167,7 +291,17 @@ class ChannelProblem:
         seed: int = 0,
         solve_max_iter: int = SOLVE_MAX_ITER,
         solve_tol: float = TRAINING_SOLVE_TOL,
+        ablation: AblationConfig = AblationConfig(),
+        rans_weight: float = RANS_LOSS_WEIGHT,
+        smooth_weight: float = SMOOTH_LOSS_WEIGHT,
+        amplitude_weight: float = AMPLITUDE_LOSS_WEIGHT,
+        amplitude_limit: float = AMPLITUDE_LIMIT,
     ):
+        if rans_weight < 0.0 or smooth_weight < 0.0 or amplitude_weight < 0.0:
+            raise ValueError("loss weights must be non-negative")
+        if amplitude_limit <= 0.0:
+            raise ValueError("amplitude_limit must be positive")
+
         self.truth = truth if truth is not None else TruthClosure()
         self.base = base if base is not None else BaselineClosure()
         self.Re_taus = tuple(Re_taus)
@@ -175,6 +309,11 @@ class ChannelProblem:
         self.seed = seed
         self.solve_max_iter = solve_max_iter
         self.solve_tol = solve_tol
+        self.ablation = ablation
+        self.rans_weight = rans_weight
+        self.smooth_weight = smooth_weight
+        self.amplitude_weight = amplitude_weight
+        self.amplitude_limit = amplitude_limit
         self._reference_cache: Dict[float, SolveResult] = {}
 
     def solved_truth(self, Re_tau: float) -> SolveResult:
@@ -230,9 +369,13 @@ class ChannelProblem:
         y_obs = observations.coords["y"]
         Re_obs = observations.coords["Re_tau"]
         U_observed = observations.targets["U"]
-        closure = ChannelClosure(model, self.base)
+        closure = ChannelClosure(model, self.base, structure=self.ablation.structure)
 
-        per_Re_tau = []
+        data_terms = []
+        rans_terms = []
+        smooth_terms = []
+        amplitude_terms = []
+
         for Re_tau in self.Re_taus:
             selected = (Re_obs == Re_tau).reshape(-1)
             solved = solve_channel(
@@ -242,11 +385,37 @@ class ChannelProblem:
                 tol=self.solve_tol,
             )
             predicted = _profile_at(solved, y_obs[selected])
-            per_Re_tau.append(((predicted - U_observed[selected]) ** 2).mean())
-        return {"data": torch.stack(per_Re_tau).mean()}
+            data_terms.append(((predicted - U_observed[selected]) ** 2).mean())
+
+            if self.ablation.rans_residual:
+                rans_terms.append(_rans_residual(solved, Re_tau))
+
+            if self.ablation.smoothness or self.ablation.structure:
+                shear = shear_plus(solved.nu_t, solved.y, Re_tau)
+                delta = _correction_field(closure, solved.y, Re_tau, shear)
+                if self.ablation.smoothness:
+                    smooth_terms.append(_smoothness_penalty(delta, solved.y))
+                if self.ablation.structure:
+                    amplitude_terms.append(_amplitude_penalty(delta, self.amplitude_limit))
+
+        terms = {"data": torch.stack(data_terms).mean()}
+        if self.ablation.rans_residual:
+            terms["rans"] = torch.stack(rans_terms).mean()
+        if self.ablation.smoothness:
+            terms["smooth"] = torch.stack(smooth_terms).mean()
+        if self.ablation.structure:
+            terms["amplitude"] = torch.stack(amplitude_terms).mean()
+        return terms
 
     def loss_weights(self) -> Dict[str, float]:
-        return {"data": 1.0}
+        weights = {"data": DATA_LOSS_WEIGHT}
+        if self.ablation.rans_residual:
+            weights["rans"] = self.rans_weight
+        if self.ablation.smoothness:
+            weights["smooth"] = self.smooth_weight
+        if self.ablation.structure:
+            weights["amplitude"] = self.amplitude_weight
+        return weights
 
     @staticmethod
     def exact(coords: Dict[str, torch.Tensor]) -> None:
