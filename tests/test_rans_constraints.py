@@ -1,4 +1,4 @@
-"""T5: structural closure invariants, losses, and the four ablation arms."""
+"""T5: structural closure invariants, losses, and ablation configurations."""
 
 from __future__ import annotations
 
@@ -11,7 +11,15 @@ from torch import nn
 from pinn.model import MLP
 from pinn.trainer import TrainConfig, train
 
-from RANS_PINN_Demo.ablations import A1, A2, A3, ALL_OFF, ABLATIONS
+from RANS_PINN_Demo.ablations import (
+    A1,
+    A2,
+    A3,
+    ALL_OFF,
+    ABLATIONS,
+    EXPERIMENT_ARMS,
+    FULL,
+)
 from RANS_PINN_Demo.channel import (
     ADDITIVE_CORRECTION_SCALE,
     ChannelClosure,
@@ -147,9 +155,16 @@ def test_the_rans_term_is_a_live_momentum_residual():
 # --- ablation configurations --------------------------------------------------
 
 
+def test_ablation_and_experiment_arm_mappings_have_distinct_roles():
+    assert set(ABLATIONS) == {"A1", "A2", "A3", "all_off"}
+    assert set(EXPERIMENT_ARMS) == {"full", "A1", "A2", "A3", "all_off"}
+    assert EXPERIMENT_ARMS["full"] == FULL
+
+
 @pytest.mark.parametrize(
     ("config", "expected_terms"),
     [
+        (FULL, {"data", "rans", "smooth", "amplitude"}),
         (A1, {"data", "rans", "smooth"}),
         (A2, {"data", "smooth", "amplitude"}),
         (A3, {"data", "rans", "amplitude"}),

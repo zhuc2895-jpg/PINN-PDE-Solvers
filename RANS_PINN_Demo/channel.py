@@ -22,6 +22,7 @@ from pinn.problem import Data, PointSet
 
 from .ablations import (
     ABLATIONS,
+    FULL,
     A1,
     A2,
     A3,
@@ -43,6 +44,7 @@ __all__ = [
     "MODEL_INPUTS",
     "TRAINING_RE_TAUS",
     "AblationConfig",
+    "FULL",
     "A1",
     "A2",
     "A3",

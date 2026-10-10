@@ -24,6 +24,14 @@
       "iterations": 18
     }
   ],
+  "test_profile": {
+    "Re_tau": 590.0,
+    "baseline_rel_l2": 0.16745126888299205,
+    "corrected_rel_l2": 0.021917761932145348,
+    "improvement": 0.8691096097488484,
+    "converged": true,
+    "iterations": 16
+  },
   "history": {
     "data": [
       4.229301193939941,

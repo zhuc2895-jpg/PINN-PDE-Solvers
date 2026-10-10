@@ -10,10 +10,23 @@ that the baseline, the synthetic truth and the learned correction are
 interchangeable under ablation, coupling and evaluation.
 """
 
-from .ablations import A1, A2, A3, ABLATIONS, ALL_OFF, AblationConfig
+from .ablations import (
+    A1,
+    A2,
+    A3,
+    ABLATIONS,
+    ALL_OFF,
+    EXPERIMENT_ARMS,
+    FULL,
+    AblationConfig,
+)
 from .channel import MODEL_INPUTS, ChannelClosure, ChannelProblem
 from .closure import BaselineClosure, Closure, TruthClosure
 from .experiment import (
+    ABLATION_RELATIVE_ERROR_INCREASE_TARGET,
+    EXTRAPOLATION_BUDGET,
+    EXTRAPOLATION_IMPROVEMENT_TARGET,
+    TEST_RE_TAU,
     ExperimentResult,
     Hyperparameters,
     ProfileMetrics,
@@ -21,6 +34,7 @@ from .experiment import (
     RunSpec,
     run_experiment,
     save_experiment,
+    plot_ablation_extrapolation,
 )
 from .inversion import (
     BandSensitivity,
@@ -49,18 +63,25 @@ __all__ = [
     "ChannelProblem",
     "MODEL_INPUTS",
     "AblationConfig",
+    "FULL",
     "A1",
     "A2",
     "A3",
     "ALL_OFF",
     "ABLATIONS",
+    "EXPERIMENT_ARMS",
     "Hyperparameters",
     "RunSpec",
     "ProfileMetrics",
     "RunResult",
     "ExperimentResult",
+    "TEST_RE_TAU",
+    "EXTRAPOLATION_BUDGET",
+    "EXTRAPOLATION_IMPROVEMENT_TARGET",
+    "ABLATION_RELATIVE_ERROR_INCREASE_TARGET",
     "run_experiment",
     "save_experiment",
+    "plot_ablation_extrapolation",
     "EddyViscosityInversion",
     "TabulatedClosure",
     "ErrorDecomposition",

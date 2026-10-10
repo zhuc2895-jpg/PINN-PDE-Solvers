@@ -1,0 +1,5 @@
+criterion,scope,budget,Re_tau,value,threshold,operator,passed,status,detail
+H2_extrapolation_improvement,full,12,590.0,0.8809022459534456,0.3,>=,True,pass,mean improvement and convergence satisfy the criterion
+single_axis_ablation_degradation,structure,12,590.0,32.42936116669709,0.1,>=,False,fail,ablated solver did not converge for every seed
+single_axis_ablation_degradation,rans_residual,12,590.0,1.647189267206528e-07,0.1,>=,False,fail,relative error increase is below the pre-registered threshold
+single_axis_ablation_degradation,smoothness,12,590.0,-0.3300320007208247,0.1,>=,False,fail,relative error increase is below the pre-registered threshold

@@ -6,7 +6,8 @@ The demo has three structural/physics axes:
 * ``rans_residual`` -- discrete momentum residual on the solved profile;
 * ``smoothness`` -- penalty on ``d(delta)/dy``.
 
-Turning all three off must reproduce the T4 data-only problem exactly.  The soft
+The full arm keeps all three axes, A1/A2/A3 remove exactly one axis each, and
+turning all three off must reproduce the T4 data-only problem exactly.  The soft
 amplitude bound belongs to the structural parameterisation: without the ``exp``
 map there is no dimensionless ``delta`` to bound, so A1 and the all-off baseline
 drop that term with it.
@@ -20,11 +21,13 @@ from typing import Mapping
 
 __all__ = [
     "AblationConfig",
+    "FULL",
     "A1",
     "A2",
     "A3",
     "ALL_OFF",
     "ABLATIONS",
+    "EXPERIMENT_ARMS",
     "DATA_LOSS_WEIGHT",
     "RANS_LOSS_WEIGHT",
     "SMOOTH_LOSS_WEIGHT",
@@ -46,6 +49,9 @@ class AblationConfig:
         return not (self.structure or self.rans_residual or self.smoothness)
 
 
+#: Full model: all three physics axes active.  This is the reference for T7
+#: single-axis ablation attribution.
+FULL = AblationConfig()
 #: A1: remove the structural map, leaving the additive closure ``nu_t_base + delta``.
 A1 = AblationConfig(structure=False)
 #: A2: keep structure and smoothness, remove the RANS residual.
@@ -57,6 +63,11 @@ ALL_OFF = AblationConfig(structure=False, rans_residual=False, smoothness=False)
 
 ABLATIONS: Mapping[str, AblationConfig] = MappingProxyType(
     {"A1": A1, "A2": A2, "A3": A3, "all_off": ALL_OFF}
+)
+#: Full model plus the four ablation/baseline arms used by the experiment
+#: harness.  ``ABLATIONS`` remains the ablation-only mapping.
+EXPERIMENT_ARMS: Mapping[str, AblationConfig] = MappingProxyType(
+    {"full": FULL, **ABLATIONS}
 )
 
 

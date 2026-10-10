@@ -1,13 +1,16 @@
-"""T6 experiment harness: validation selection and the data-volume sweep.
+"""T6/T7 experiment harness: validation, sweeps, and extrapolation.
 
 This is deliberately a thin orchestration layer.  The physics and the model are
-already separate seams; what T6 adds is the experimental discipline around
+already separate seams; what this harness adds is experimental discipline around
 them:
 
 * one frozen hyperparameter choice, selected on held-out points at Re_tau=395;
 * every ablation arm trained on the same nested 8/12/16 budgets and seeds;
 * per-seed records plus a mean +/- std summary table;
-* a data-volume curve that plots every seed, not only the best one.
+* a data-volume curve that plots every seed, not only the best one;
+* one unseen Re_tau=590 score per frozen model;
+* single-axis ablation attribution against the full three-axis model;
+* a pre-registered pass/fail table for the extrapolation claim.
 
 The runner is CPU-only because ``ChannelProblem.losses`` solves on the CPU.  A
 full default sweep is a few minutes on this machine; tests use the same public
@@ -23,7 +26,7 @@ import math
 import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 
@@ -33,7 +36,7 @@ from pinn.plotting import plt, save_figure
 from pinn.trainer import TrainConfig, train
 
 from .ablations import (
-    ABLATIONS,
+    EXPERIMENT_ARMS,
     AMPLITUDE_LOSS_WEIGHT,
     RANS_LOSS_WEIGHT,
     SMOOTH_LOSS_WEIGHT,
@@ -64,9 +67,25 @@ __all__ = [
     "select_hyperparameters",
     "run_experiment",
     "save_experiment",
+    "plot_ablation_extrapolation",
+    "TEST_RE_TAU",
+    "EXTRAPOLATION_BUDGET",
+    "EXTRAPOLATION_IMPROVEMENT_TARGET",
+    "ABLATION_RELATIVE_ERROR_INCREASE_TARGET",
 ]
 
 VALIDATION_RE_TAU = 395.0
+#: The one held-out Reynolds number.  It is never part of ``problem.Re_taus``.
+TEST_RE_TAU = 590.0
+#: E3/E4 use the 12-point budget.  The other budgets are still archived, but
+#: the pre-registered extrapolation and attribution criteria are read at 12.
+EXTRAPOLATION_BUDGET = 12
+#: Pre-registered H2 threshold from docs/rans-pinn-demo-plan.md section 9.
+EXTRAPOLATION_IMPROVEMENT_TARGET = 0.30
+#: A removed axis counts as a material loss if the relative L2 error rises by
+#: at least this fraction of the full model's error.  This threshold is fixed
+#: before T7 is run and applies to each of A1/A2/A3 independently.
+ABLATION_RELATIVE_ERROR_INCREASE_TARGET = 0.10
 DEFAULT_SELECTION_BUDGET = 16
 DEFAULT_SEEDS: Tuple[int, ...] = (0, 1, 2)
 DEFAULT_MODEL_WIDTH = 32
@@ -126,17 +145,21 @@ class RunResult:
     validation_rel_l2: float
     validation_converged: bool
     profiles: Tuple[ProfileMetrics, ...]
+    test_profile: ProfileMetrics
     history: Dict[str, List[float]]
 
 
 @dataclass
 class ExperimentResult:
-    """Everything needed to write the T6 tables and figure."""
+    """Everything needed to write the T6/T7 tables and figures."""
 
     selected: Hyperparameters
     selection_records: List[Dict[str, object]]
     runs: List[RunResult]
     summary_rows: List[Dict[str, object]]
+    extrapolation_rows: List[Dict[str, object]]
+    ablation_rows: List[Dict[str, object]]
+    criteria_rows: List[Dict[str, object]]
 
 
 def validation_points(Re_tau: float = VALIDATION_RE_TAU) -> torch.Tensor:
@@ -339,7 +362,7 @@ def _variant_run(
     depth: int,
     verbose: bool,
 ) -> RunResult:
-    problem = _make_problem(ABLATIONS[spec.arm], spec.seed, hyperparameters)
+    problem = _make_problem(EXPERIMENT_ARMS[spec.arm], spec.seed, hyperparameters)
     model, history = _train_once(
         problem,
         spec.budget,
@@ -351,12 +374,16 @@ def _variant_run(
         verbose,
     )
     profiles = tuple(profile_metrics(problem, model, Re_tau) for Re_tau in problem.Re_taus)
+    # This is the only Re_tau=590 evaluation for this frozen model.  The metric
+    # is stored and all later reporting is a pure transformation of this value.
+    test_profile = profile_metrics(problem, model, TEST_RE_TAU)
     validation, validation_converged, _ = _validation_metrics(problem, model)
     return RunResult(
         spec=spec,
         validation_rel_l2=validation,
         validation_converged=validation_converged,
         profiles=profiles,
+        test_profile=test_profile,
         history=history,
     )
 
@@ -370,13 +397,12 @@ def _mean_std(values: Sequence[float]) -> Tuple[float, float]:
     return float(mean), float(std)
 
 
-def _summarize(runs: Sequence[RunResult]) -> List[Dict[str, object]]:
+def _summarize_profiles(
+    records: Iterable[Tuple[str, int, ProfileMetrics]]
+) -> List[Dict[str, object]]:
     grouped: Dict[Tuple[str, int, float], List[ProfileMetrics]] = {}
-    for run in runs:
-        for profile in run.profiles:
-            grouped.setdefault(
-                (run.spec.arm, run.spec.budget, profile.Re_tau), []
-            ).append(profile)
+    for arm, budget, profile in records:
+        grouped.setdefault((arm, budget, profile.Re_tau), []).append(profile)
 
     rows: List[Dict[str, object]] = []
     for (arm, budget, Re_tau), profiles in sorted(grouped.items()):
@@ -395,6 +421,137 @@ def _summarize(runs: Sequence[RunResult]) -> List[Dict[str, object]]:
                 "corrected_rel_l2_std": corrected_std,
                 "improvement_mean": improvement_mean,
                 "improvement_std": improvement_std,
+                "n_converged": sum(int(profile.converged) for profile in profiles),
+                "converged_all": all(profile.converged for profile in profiles),
+            }
+        )
+    return rows
+
+
+def _summarize(runs: Sequence[RunResult]) -> List[Dict[str, object]]:
+    return _summarize_profiles(
+        (run.spec.arm, run.spec.budget, profile)
+        for run in runs
+        for profile in run.profiles
+    )
+
+
+def _summarize_extrapolation(runs: Sequence[RunResult]) -> List[Dict[str, object]]:
+    return _summarize_profiles(
+        (run.spec.arm, run.spec.budget, run.test_profile) for run in runs
+    )
+
+
+def _ablation_attribution(
+    extrapolation_rows: Sequence[Mapping[str, object]],
+) -> List[Dict[str, object]]:
+    """Compare each one-axis-off arm with the full model at the E3/E4 budget."""
+    lookup = {
+        (str(row["arm"]), int(row["budget"])): row
+        for row in extrapolation_rows
+    }
+    full = lookup.get(("full", EXTRAPOLATION_BUDGET))
+    if full is None:
+        return []
+
+    full_corrected = float(full["corrected_rel_l2_mean"])
+    rows: List[Dict[str, object]] = []
+    for arm, axis in (("A1", "structure"), ("A2", "rans_residual"), ("A3", "smoothness")):
+        ablated = lookup.get((arm, EXTRAPOLATION_BUDGET))
+        if ablated is None:
+            continue
+        ablated_corrected = float(ablated["corrected_rel_l2_mean"])
+        relative_increase = (
+            ablated_corrected / full_corrected - 1.0 if full_corrected else math.inf
+        )
+        improvement_drop = float(full["improvement_mean"]) - float(
+            ablated["improvement_mean"]
+        )
+        passed = (
+            bool(full["converged_all"])
+            and bool(ablated["converged_all"])
+            and relative_increase >= ABLATION_RELATIVE_ERROR_INCREASE_TARGET
+        )
+        details = []
+        if not ablated["converged_all"]:
+            details.append("ablated solver did not converge for every seed")
+        if relative_increase < ABLATION_RELATIVE_ERROR_INCREASE_TARGET:
+            details.append("relative error increase is below the pre-registered threshold")
+        if not details:
+            details.append("material degradation on every seed's solved state")
+        rows.append(
+            {
+                "axis": axis,
+                "ablated_arm": arm,
+                "budget": EXTRAPOLATION_BUDGET,
+                "Re_tau": TEST_RE_TAU,
+                "full_corrected_rel_l2_mean": full_corrected,
+                "ablated_corrected_rel_l2_mean": ablated_corrected,
+                "relative_error_increase": relative_increase,
+                "full_improvement_mean": float(full["improvement_mean"]),
+                "ablated_improvement_mean": float(ablated["improvement_mean"]),
+                "improvement_drop": improvement_drop,
+                "full_converged_all": bool(full["converged_all"]),
+                "ablated_converged_all": bool(ablated["converged_all"]),
+                "passed": passed,
+                "status": "pass" if passed else "fail",
+                "detail": "; ".join(details),
+            }
+        )
+    return rows
+
+
+def _criteria_rows(
+    extrapolation_rows: Sequence[Mapping[str, object]],
+    ablation_rows: Sequence[Mapping[str, object]],
+) -> List[Dict[str, object]]:
+    """Turn the frozen thresholds into an explicit pass/fail record."""
+    lookup = {
+        (str(row["arm"]), int(row["budget"])): row
+        for row in extrapolation_rows
+    }
+    full = lookup.get(("full", EXTRAPOLATION_BUDGET))
+    if full is None:
+        return []
+
+    h2_passed = bool(
+        full["converged_all"]
+        and float(full["improvement_mean"]) >= EXTRAPOLATION_IMPROVEMENT_TARGET
+    )
+    h2_details = []
+    if not full["converged_all"]:
+        h2_details.append("full model did not converge for every seed")
+    if float(full["improvement_mean"]) < EXTRAPOLATION_IMPROVEMENT_TARGET:
+        h2_details.append("mean improvement is below the pre-registered threshold")
+    if not h2_details:
+        h2_details.append("mean improvement and convergence satisfy the criterion")
+    rows: List[Dict[str, object]] = [
+        {
+            "criterion": "H2_extrapolation_improvement",
+            "scope": "full",
+            "budget": EXTRAPOLATION_BUDGET,
+            "Re_tau": TEST_RE_TAU,
+            "value": float(full["improvement_mean"]),
+            "threshold": EXTRAPOLATION_IMPROVEMENT_TARGET,
+            "operator": ">=",
+            "passed": h2_passed,
+            "status": "pass" if h2_passed else "fail",
+            "detail": "; ".join(h2_details),
+        }
+    ]
+    for row in ablation_rows:
+        rows.append(
+            {
+                "criterion": "single_axis_ablation_degradation",
+                "scope": str(row["axis"]),
+                "budget": row["budget"],
+                "Re_tau": row["Re_tau"],
+                "value": row["relative_error_increase"],
+                "threshold": ABLATION_RELATIVE_ERROR_INCREASE_TARGET,
+                "operator": ">=",
+                "passed": bool(row["passed"]),
+                "status": str(row["status"]),
+                "detail": str(row["detail"]),
             }
         )
     return rows
@@ -403,7 +560,7 @@ def _summarize(runs: Sequence[RunResult]) -> List[Dict[str, object]]:
 def run_experiment(
     *,
     candidates: Sequence[Hyperparameters] = DEFAULT_HYPERPARAMETER_CANDIDATES,
-    arms: Sequence[str] = tuple(ABLATIONS),
+    arms: Sequence[str] = tuple(EXPERIMENT_ARMS),
     budgets: Sequence[int] = DATA_BUDGETS,
     seeds: Sequence[int] = DEFAULT_SEEDS,
     epochs: int = DEFAULT_EPOCHS,
@@ -422,9 +579,11 @@ def run_experiment(
         raise ValueError("at least one data budget is required")
     if not seeds:
         raise ValueError("at least one seed is required")
-    unknown = [arm for arm in arms if arm not in ABLATIONS]
+    unknown = [arm for arm in arms if arm not in EXPERIMENT_ARMS]
     if unknown:
-        raise ValueError(f"unknown arms {unknown}; choose from {sorted(ABLATIONS)}")
+        raise ValueError(
+            f"unknown arms {unknown}; choose from {sorted(EXPERIMENT_ARMS)}"
+        )
     for budget in budgets:
         if budget not in DATA_BUDGETS:
             raise ValueError(f"budget must be one of {DATA_BUDGETS}, got {budget}")
@@ -463,11 +622,17 @@ def run_experiment(
                     )
                 )
 
+    summary_rows = _summarize(runs)
+    extrapolation_rows = _summarize_extrapolation(runs)
+    ablation_rows = _ablation_attribution(extrapolation_rows)
     return ExperimentResult(
         selected=selected,
         selection_records=selection_records,
         runs=runs,
-        summary_rows=_summarize(runs),
+        summary_rows=summary_rows,
+        extrapolation_rows=extrapolation_rows,
+        ablation_rows=ablation_rows,
+        criteria_rows=_criteria_rows(extrapolation_rows, ablation_rows),
     )
 
 
@@ -537,13 +702,137 @@ def plot_data_volume(result: ExperimentResult, path: Path) -> None:
     save_figure(fig, str(path))
 
 
+def plot_ablation_extrapolation(result: ExperimentResult, path: Path) -> None:
+    """Plot unseen-Re performance and each axis's marginal contribution.
+
+    Every seed is drawn as a marker.  Error bars are sample mean +/- sample std;
+    the full-model marker is never selected as a best-of-seeds substitute.
+    """
+    lookup = {
+        (str(row["arm"]), int(row["budget"])): row
+        for row in result.extrapolation_rows
+    }
+    if ("full", EXTRAPOLATION_BUDGET) not in lookup:
+        raise ValueError("the full arm is required for ablation attribution")
+
+    arms = [arm for arm in ("full", "A1", "A2", "A3", "all_off") if (arm, EXTRAPOLATION_BUDGET) in lookup]
+    colors = {arm: plt.cm.tab10.colors[index] for index, arm in enumerate(arms)}
+    fig, (ax_improvement, ax_contribution) = plt.subplots(1, 2, figsize=(11.2, 4.6))
+
+    for arm in arms:
+        runs = sorted(
+            (run for run in result.runs if run.spec.arm == arm and run.spec.budget == EXTRAPOLATION_BUDGET),
+            key=lambda run: run.spec.seed,
+        )
+        values = [100.0 * run.test_profile.improvement for run in runs]
+        mean, std = _mean_std(values)
+        offsets = [(index - (len(values) - 1) / 2.0) * 0.06 for index in range(len(values))]
+        ax_improvement.scatter(
+            [arms.index(arm) + offset for offset in offsets],
+            values,
+            color=colors[arm],
+            s=20,
+            alpha=0.65,
+            zorder=3,
+        )
+        ax_improvement.errorbar(
+            [arms.index(arm)],
+            [mean],
+            yerr=[std],
+            marker="o",
+            capsize=4,
+            linewidth=1.6,
+            color=colors[arm],
+            zorder=2,
+        )
+
+    ax_improvement.axhline(
+        100.0 * EXTRAPOLATION_IMPROVEMENT_TARGET,
+        color="black",
+        linestyle="--",
+        linewidth=1.0,
+        label="pre-registered H2 threshold",
+    )
+    ax_improvement.set_xticks(range(len(arms)))
+    ax_improvement.set_xticklabels(arms)
+    ax_improvement.set_ylabel("U+ relative L2 improvement vs baseline (%)")
+    ax_improvement.set_title(f"Unseen Re_tau={TEST_RE_TAU:g}, budget={EXTRAPOLATION_BUDGET}")
+    ax_improvement.set_yscale("symlog", linthresh=100.0)
+    ax_improvement.grid(True, axis="y", alpha=0.25)
+    ax_improvement.legend()
+
+    full_runs = {
+        run.spec.seed: run
+        for run in result.runs
+        if run.spec.arm == "full" and run.spec.budget == EXTRAPOLATION_BUDGET
+    }
+    for arm, axis in (("A1", "structure"), ("A2", "rans residual"), ("A3", "smoothness")):
+        runs = sorted(
+            (
+                run
+                for run in result.runs
+                if run.spec.arm == arm and run.spec.budget == EXTRAPOLATION_BUDGET
+            ),
+            key=lambda run: run.spec.seed,
+        )
+        values = []
+        for run in runs:
+            full = full_runs.get(run.spec.seed)
+            if full is None:
+                continue
+            values.append(
+                100.0
+                * (run.test_profile.corrected_rel_l2 / full.test_profile.corrected_rel_l2 - 1.0)
+            )
+        if not values:
+            continue
+        mean, std = _mean_std(values)
+        offsets = [(index - (len(values) - 1) / 2.0) * 0.06 for index in range(len(values))]
+        ax_contribution.scatter(
+            [axis] * len(values),
+            values,
+            color=colors[arm],
+            s=20,
+            alpha=0.65,
+            zorder=3,
+        )
+        ax_contribution.errorbar(
+            [axis],
+            [mean],
+            yerr=[std],
+            marker="o",
+            capsize=4,
+            linewidth=1.6,
+            color=colors[arm],
+            zorder=2,
+        )
+
+    ax_contribution.axhline(
+        100.0 * ABLATION_RELATIVE_ERROR_INCREASE_TARGET,
+        color="black",
+        linestyle="--",
+        linewidth=1.0,
+        label="pre-registered 10% threshold",
+    )
+    ax_contribution.set_ylabel("relative L2 increase after removing axis (%)")
+    ax_contribution.set_title("Single-axis ablation contribution")
+    ax_contribution.set_yscale("symlog", linthresh=10.0)
+    ax_contribution.grid(True, axis="y", alpha=0.25)
+    ax_contribution.legend()
+
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, str(path))
+
+
 def save_experiment(
     result: ExperimentResult,
     out_dir: Path,
     *,
     figure_path: Optional[Path] = None,
+    ablation_figure_path: Optional[Path] = None,
 ) -> None:
-    """Write per-seed archives, summary tables, and the data-volume figure."""
+    """Write per-seed archives, T6/T7 tables, and both experiment figures."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     runs_dir = out_dir / "runs"
@@ -570,6 +859,7 @@ def save_experiment(
         _write_csv(out_dir / "validation_selection.csv", selection_rows)
 
     main_rows: List[Dict[str, object]] = []
+    extrapolation_run_rows: List[Dict[str, object]] = []
     for run in result.runs:
         for profile in run.profiles:
             main_rows.append(
@@ -587,6 +877,19 @@ def save_experiment(
                     "validation_converged": run.validation_converged,
                 }
             )
+        extrapolation_run_rows.append(
+            {
+                "arm": run.spec.arm,
+                "budget": run.spec.budget,
+                "seed": run.spec.seed,
+                "Re_tau": run.test_profile.Re_tau,
+                "baseline_rel_l2": run.test_profile.baseline_rel_l2,
+                "corrected_rel_l2": run.test_profile.corrected_rel_l2,
+                "improvement": run.test_profile.improvement,
+                "converged": run.test_profile.converged,
+                "iterations": run.test_profile.iterations,
+            }
+        )
 
         run_path = runs_dir / f"{run.spec.arm}_budget{run.spec.budget}_seed{run.spec.seed}.json"
         with run_path.open("w", encoding="utf-8") as handle:
@@ -596,6 +899,7 @@ def save_experiment(
                     "validation_rel_l2": run.validation_rel_l2,
                     "validation_converged": run.validation_converged,
                     "profiles": [asdict(profile) for profile in run.profiles],
+                    "test_profile": asdict(run.test_profile),
                     "history": run.history,
                 },
                 handle,
@@ -604,10 +908,18 @@ def save_experiment(
             handle.write("\n")
     _write_csv(out_dir / "main_runs.csv", main_rows)
     _write_csv(out_dir / "error_table.csv", result.summary_rows)
+    _write_csv(out_dir / "extrapolation_runs.csv", extrapolation_run_rows)
+    _write_csv(out_dir / "extrapolation_table.csv", result.extrapolation_rows)
+    if result.ablation_rows:
+        _write_csv(out_dir / "ablation_table.csv", result.ablation_rows)
+    if result.criteria_rows:
+        _write_csv(out_dir / "criteria.csv", result.criteria_rows)
 
     if figure_path is None:
         figure_path = out_dir / "data_volume_curve.png"
     plot_data_volume(result, Path(figure_path))
+    if ablation_figure_path is not None:
+        plot_ablation_extrapolation(result, Path(ablation_figure_path))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -618,10 +930,20 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("RANS_PINN_Demo/figures/data_volume_curve.png"),
     )
+    parser.add_argument(
+        "--ablation-figure",
+        type=Path,
+        default=Path("RANS_PINN_Demo/figures/physics_ablation.png"),
+    )
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--seeds", type=int, nargs="+", default=list(DEFAULT_SEEDS))
     parser.add_argument("--budgets", type=int, nargs="+", default=list(DATA_BUDGETS))
-    parser.add_argument("--arms", nargs="+", choices=sorted(ABLATIONS), default=sorted(ABLATIONS))
+    parser.add_argument(
+        "--arms",
+        nargs="+",
+        choices=sorted(EXPERIMENT_ARMS),
+        default=sorted(EXPERIMENT_ARMS),
+    )
     parser.add_argument("--width", type=int, default=DEFAULT_MODEL_WIDTH)
     parser.add_argument("--depth", type=int, default=DEFAULT_MODEL_DEPTH)
     parser.add_argument("--selection-seed", type=int, default=0)
@@ -645,7 +967,12 @@ def main() -> None:
         select=not args.no_select,
         verbose=args.verbose,
     )
-    save_experiment(result, args.out_dir, figure_path=args.figure)
+    save_experiment(
+        result,
+        args.out_dir,
+        figure_path=args.figure,
+        ablation_figure_path=args.ablation_figure,
+    )
     print("Frozen hyperparameters:", asdict(result.selected))
     print(f"Wrote {len(result.runs)} runs to {args.out_dir}")
 
