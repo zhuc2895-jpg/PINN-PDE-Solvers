@@ -6,7 +6,7 @@ from :mod:`pinn.plotting`, so nothing here can hang a headless run.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Optional, Sequence
 
 import torch
 
@@ -33,12 +33,13 @@ def closure_comparison(
     truth = TruthClosure() if truth is None else truth
     baseline = BaselineClosure()
     y = torch.linspace(1e-6, 1.0, n, dtype=torch.float64).reshape(-1, 1)
+    y_flat = y.reshape(-1)
 
     fig, axes = plt.subplots(1, len(Re_taus), figsize=(4.2 * len(Re_taus), 3.8))
     axes = list(axes) if hasattr(axes, "__len__") else [axes]
 
     for ax, Re_tau in zip(axes, Re_taus):
-        y_plus = (y.reshape(-1) * Re_tau).numpy()
+        y_plus = (y_flat * Re_tau).numpy()
         ax.loglog(y_plus, baseline(y, Re_tau).reshape(-1).numpy(), label="baseline")
         ax.loglog(y_plus, truth(y, Re_tau).reshape(-1).numpy(), label="truth")
         ax.set_title(r"$Re_\tau = %g$" % Re_tau)

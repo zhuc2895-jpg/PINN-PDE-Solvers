@@ -10,9 +10,10 @@ learned correction -- implements :class:`Closure`, so ablations, the coupling
 solve and evaluation all swap implementations rather than branching.
 
 ``shear`` is the local mean shear of the current iterate.  Prescribed closures
-ignore it; a learned correction needs it, because a closure that depends only on
-``y`` would make the RANS equation a single quadrature and the "fixed-point
-iteration" a fiction (see ``docs/adr/0001-solver-in-the-loop-training.md``).
+ignore it -- they are given profiles -- but it is part of the seam because a
+learned correction that depends only on ``y`` would make the RANS equation a
+single quadrature and the "fixed-point iteration" a fiction (see
+``docs/adr/0001-solver-in-the-loop-training.md``).
 """
 
 from __future__ import annotations
@@ -50,6 +51,10 @@ LOG_LAYER_LO = 30.0
 LOG_LAYER_FRACTION = 0.2
 LOG_LAYER_TAPER = 10.0
 
+#: The baseline's damping exponent.  A value of 2 is what turns the mixing
+#: length's single power of ``y`` into the ``y**3`` viscous-sub-layer asymptote.
+BASELINE_DAMPING_EXPONENT = 2.0
+
 
 @runtime_checkable
 class Closure(Protocol):
@@ -63,12 +68,20 @@ class Closure(Protocol):
     ) -> torch.Tensor: ...
 
 
-def _damping(y_plus: torch.Tensor, exponent: float = 2.0, a_plus: float = A_PLUS) -> torch.Tensor:
-    """van Driest damping ``(1 - exp(-y_plus / a_plus))**exponent``.
+def _mixing_shape(y: torch.Tensor, kappa: float):
+    """The mixing-length profile before damping.
 
-    At the baseline parameters (exponent 2) this is what turns the mixing
-    length's single power of ``y`` into the ``y**3`` viscous-sub-layer asymptote.
+    ``~y`` at the wall from the first term and ``~y**2`` from the centreline
+    plateau; the ``y**3`` asymptote of the finished profile comes from the
+    damping, not from here.
     """
+    return kappa * y * (1.0 - y) + C_CORE * y**2
+
+
+def _damping(
+    y_plus: torch.Tensor, exponent: float = BASELINE_DAMPING_EXPONENT, a_plus: float = A_PLUS
+) -> torch.Tensor:
+    """van Driest damping ``(1 - exp(-y_plus / a_plus))**exponent``."""
     return (1.0 - torch.exp(-y_plus / a_plus)) ** exponent
 
 
@@ -83,7 +96,7 @@ def _log_layer_window(
 
     Localising the slope drift here is what stops it from being a constant
     factor: scaling ``kappa`` over the whole profile is just scaling ``nu_t``,
-    which any correction can absorb for free.
+    and a constant is exactly what the correction could absorb for free.
     """
     return torch.sigmoid((y_plus - lo) / taper) * torch.sigmoid(
         (fraction * Re_tau - y_plus) / taper
@@ -97,6 +110,9 @@ class BaselineClosure:
     the centreline, and a multiplicative correction cannot repair an error where
     its own factor is zero.  The ``C_CORE`` term supplies a finite centreline
     value while the mixing-length term still dominates the log layer.
+
+    Its near-wall asymptote is ``y**3``, from the damping -- the mixing length
+    alone would only give ``y``.
     """
 
     def __call__(
@@ -105,9 +121,7 @@ class BaselineClosure:
         Re_tau: float,
         shear: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        y_hat = y
-        shape = KAPPA * y_hat * (1.0 - y_hat) + C_CORE * y_hat**2
-        return shape * _damping(y_hat * Re_tau)
+        return _mixing_shape(y, KAPPA) * _damping(y * Re_tau)
 
 
 class TruthClosure:
@@ -122,7 +136,8 @@ class TruthClosure:
     * ``log_layer_deviation`` lets the log-layer slope drift with ``Re_tau``,
       windowed to the log layer so it is a change of *shape*, not of scale.
 
-    Both off reproduces :class:`BaselineClosure` bit for bit.
+    Both off reproduces :class:`BaselineClosure` bit for bit, because both then
+    take the same path with the baseline's parameters.
     """
 
     def __init__(
@@ -157,22 +172,18 @@ class TruthClosure:
         Re_tau: float,
         shear: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        y_hat = y
-        y_plus = y_hat * Re_tau
-
+        y_plus = y * Re_tau
         if self.near_wall_deviation:
             a_plus = self.damping_a_plus
             exponent = self.damping_exponent
         else:
             a_plus = A_PLUS
-            exponent = 2.0
-
-        kappa = self._effective_kappa(y_plus, Re_tau)
-        shape = kappa * y_hat * (1.0 - y_hat) + C_CORE * y_hat**2
-        return shape * _damping(y_plus, exponent=exponent, a_plus=a_plus)
+            exponent = BASELINE_DAMPING_EXPONENT
+        return _mixing_shape(y, self._effective_kappa(y_plus, Re_tau)) * _damping(
+            y_plus, exponent=exponent, a_plus=a_plus
+        )
 
     def _effective_kappa(self, y_plus: torch.Tensor, Re_tau: float):
-        if not self.log_layer_deviation:
-            return KAPPA
+        """``KAPPA`` outside the log layer, the drifted value inside it."""
         k_true = self.kappa(Re_tau)
         return KAPPA + (k_true - KAPPA) * _log_layer_window(y_plus, Re_tau)

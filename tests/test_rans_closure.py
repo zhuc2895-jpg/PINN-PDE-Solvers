@@ -20,6 +20,13 @@ RE_TAU_TEST = 590.0
 def _y(n: int = 200) -> torch.Tensor:
     return torch.linspace(0.0, 1.0, n).reshape(-1, 1)
 
+def _near_wall_log_log_slope(closure, Re_tau: float) -> float:
+    """Slope of ``log(nu_t)`` against ``log(y)`` at two points well inside
+    ``y_plus << A_plus``, so the constant prefactor drops out."""
+    y = torch.tensor([[1e-4], [2e-4]], dtype=torch.float64)
+    nu_t = closure(y, Re_tau)
+    return (torch.log(nu_t[1]) - torch.log(nu_t[0])).item() / math.log(2.0)
+
 
 def test_closure_returns_one_eddy_viscosity_per_point():
     y = _y(9)
@@ -40,10 +47,8 @@ def test_baseline_near_wall_mixing_length_grows_like_y_cubed():
     supplies the other two.  Measured as a log-log slope between two points well
     inside ``y_plus << A_plus``, so the constant prefactor drops out.
     """
-    y = torch.tensor([[1e-4], [2e-4]], dtype=torch.float64)
-    nu_t = BaselineClosure()(y, 395.0)
-    slope = (torch.log(nu_t[1]) - torch.log(nu_t[0])) / math.log(2.0)
-    assert abs(slope.item() - 3.0) < 0.05
+    slope = _near_wall_log_log_slope(BaselineClosure(), 395.0)
+    assert abs(slope - 3.0) < 0.05
 
 
 def test_baseline_does_not_collapse_at_the_centreline():
@@ -80,16 +85,10 @@ def test_truth_breaks_the_near_wall_y_cubed_asymptote():
     different function, so its asymptote must differ.  A measured slope is the
     only way to pin this -- the two profiles look alike on a plot of y vs nu_t.
     """
-    y = torch.tensor([[1e-4], [2e-4]], dtype=torch.float64)
-    slope = {}
-    for name, closure in (
-        ("baseline", BaselineClosure()),
-        ("truth", TruthClosure(log_layer_deviation=False)),
-    ):
-        nu_t = closure(y, 395.0)
-        slope[name] = (torch.log(nu_t[1]) - torch.log(nu_t[0])).item() / math.log(2.0)
-    assert abs(slope["baseline"] - 3.0) < 0.05
-    assert slope["truth"] > slope["baseline"] + 0.3
+    baseline = _near_wall_log_log_slope(BaselineClosure(), 395.0)
+    truth = _near_wall_log_log_slope(TruthClosure(log_layer_deviation=False), 395.0)
+    assert abs(baseline - 3.0) < 0.05
+    assert truth > baseline + 0.3
 
 
 def test_log_layer_deviation_is_inert_at_the_reference_reynolds_number():
