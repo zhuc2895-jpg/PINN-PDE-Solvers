@@ -123,8 +123,8 @@ def solve_channel(
         target = closure(y, Re_tau, shear=shear).to(torch.float64)
         residual = target - nu_t
         step = alpha * residual
-        residual_norms.append(float(residual.abs().max()))
-        step_norms.append(float(step.abs().max()))
+        residual_norms.append(float(residual.detach().abs().max()))
+        step_norms.append(float(step.detach().abs().max()))
         nu_t = nu_t + step
 
         if (

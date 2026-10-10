@@ -33,6 +33,16 @@ from .coupling import (
     save_coupling_artifacts,
     train_frozen_full_model,
 )
+from .deliverables import (
+    PROFILE_RE_TAUS,
+    DeliverableData,
+    build_adr_markdown,
+    build_report_markdown,
+    collect_deliverable_data,
+    generate_deliverables,
+    plot_eddy_viscosity_correction,
+    plot_velocity_profiles,
+)
 from .experiment import (
     ABLATION_RELATIVE_ERROR_INCREASE_TARGET,
     EXTRAPOLATION_BUDGET,
@@ -74,6 +84,14 @@ __all__ = [
     "run_coupling_experiment",
     "save_coupling_artifacts",
     "plot_coupling_history",
+    "DeliverableData",
+    "PROFILE_RE_TAUS",
+    "collect_deliverable_data",
+    "plot_velocity_profiles",
+    "plot_eddy_viscosity_correction",
+    "build_report_markdown",
+    "build_adr_markdown",
+    "generate_deliverables",
     "BaselineClosure",
     "TruthClosure",
     "SolveResult",
