@@ -13,6 +13,15 @@ interchangeable under ablation, coupling and evaluation.
 from .ablations import A1, A2, A3, ABLATIONS, ALL_OFF, AblationConfig
 from .channel import MODEL_INPUTS, ChannelClosure, ChannelProblem
 from .closure import BaselineClosure, Closure, TruthClosure
+from .experiment import (
+    ExperimentResult,
+    Hyperparameters,
+    ProfileMetrics,
+    RunResult,
+    RunSpec,
+    run_experiment,
+    save_experiment,
+)
 from .solver import SolveResult, solve_channel, wall_clustered_grid
 
 __all__ = [
@@ -31,4 +40,11 @@ __all__ = [
     "A3",
     "ALL_OFF",
     "ABLATIONS",
+    "Hyperparameters",
+    "RunSpec",
+    "ProfileMetrics",
+    "RunResult",
+    "ExperimentResult",
+    "run_experiment",
+    "save_experiment",
 ]
