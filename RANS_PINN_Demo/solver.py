@@ -11,11 +11,13 @@ is needed because a learned closure may depend on the local shear, which depends
 on ``U``, which depends on ``nu_t``: a closure that depends only on ``y`` would
 make this loop a fiction, and the loop is the thing H3 is about (see
 ``docs/adr/0001-solver-in-the-loop-training.md``).
+
+``nu_t`` is the field being iterated; ``U`` is a deterministic functional of it,
+so a small fixed-point residual is what makes the whole coupled state settled.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -29,8 +31,6 @@ U_TAU = 1.0
 H = 1.0
 
 
-
-
 @dataclass
 class SolveResult:
     """Everything the caller needs to judge the solve, not just the answer."""
@@ -40,10 +40,11 @@ class SolveResult:
     nu_t: torch.Tensor
     iterations: int
     converged: bool
-    #: ``max|F(nu_t) - nu_t|`` per iteration, before relaxation.
-    residual: List[float] = field(default_factory=list)
-    #: ``max|nu_t_next - nu_t|`` per iteration -- this is what ``tol`` bounds.
-    change: List[float] = field(default_factory=list)
+    #: ``max|F(nu_t) - nu_t|`` per iteration, evaluated *before* relaxation.
+    #: This is the honest measure of distance from the fixed point.
+    residual_norms: List[float] = field(default_factory=list)
+    #: ``max|nu_t_next - nu_t|`` per iteration -- the relaxed step actually taken.
+    step_norms: List[float] = field(default_factory=list)
 
 
 def wall_clustered_grid(n: int = 801, dtype: torch.dtype = torch.float64) -> torch.Tensor:
@@ -55,26 +56,27 @@ def wall_clustered_grid(n: int = 801, dtype: torch.dtype = torch.float64) -> tor
 
 def _cumulative_trapezoid(f: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """``int_0^y f`` at each grid point, with the value at ``y = 0`` fixed at 0."""
-    dy = y[1:] - y[:-1]
-    segments = 0.5 * (f[1:] + f[:-1]) * dy
+    segments = 0.5 * (f[1:] + f[:-1]) * (y[1:] - y[:-1])
     out = torch.zeros_like(f)
     out[1:] = torch.cumsum(segments, dim=0)
     return out
 
 
-def _shear_from(nu_t: torch.Tensor, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
-    """Wall-unit mean shear ``dU+/dy+`` implied by the current ``nu_t``."""
+def _du_dy(nu_t: torch.Tensor, y: torch.Tensor, Re_tau: float) -> torch.Tensor:
+    """Mean shear implied by ``nu_t``, straight from the total-stress relation.
+
+    The one place that relation is written; both the shear handed to the closure
+    and the final quadrature go through it.
+    """
     nu = 1.0 / Re_tau
-    dU_dy = U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
-    return dU_dy / Re_tau
+    return U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
 
 
 def _is_monotone_decreasing(residual: List[float]) -> bool:
     """True when the whole residual history is non-increasing.
 
     A small relative slack absorbs round-off.  Requiring the *whole* history,
-    not just the last few steps, is the point: a shrinking step size on its own
-    must never be mistaken for convergence, so an iteration that ever grew --
+    not just the last few steps, is the point: an iteration that ever grew --
     an oscillation, a limit cycle -- stays unconverged and has to be reported.
     """
     return all(b <= a * (1.0 + 1e-6) for a, b in zip(residual, residual[1:]))
@@ -94,6 +96,10 @@ def solve_channel(
     step, smaller values damp it.  ``converged`` is False whenever the iteration
     ran out of budget *or* the residual never settled -- the caller is never
     handed the last iterate dressed up as an answer.
+
+    Convergence requires the *residual* to be below ``tol``, not merely the step.
+    The step is ``alpha * residual``, so judging by the step alone would let any
+    caller manufacture convergence by shrinking ``alpha``.
     """
     if not 0.0 < alpha <= 1.0:
         raise ValueError(f"alpha must be in (0, 1], got {alpha}")
@@ -103,29 +109,33 @@ def solve_channel(
     y = y.to(torch.float64)
 
     nu_t = closure(y, Re_tau).to(torch.float64)
-    residual: List[float] = []
-    change: List[float] = []
+    residual_norms: List[float] = []
+    step_norms: List[float] = []
     converged = False
 
     for _ in range(max_iter):
-        target = closure(y, Re_tau, shear=_shear_from(nu_t, y, Re_tau)).to(torch.float64)
-        step = target - nu_t
-        residual.append(float(step.abs().max()))
-        step = alpha * step
-        change.append(float(step.abs().max()))
+        shear = _du_dy(nu_t, y, Re_tau) / Re_tau
+        target = closure(y, Re_tau, shear=shear).to(torch.float64)
+        residual = target - nu_t
+        step = alpha * residual
+        residual_norms.append(float(residual.abs().max()))
+        step_norms.append(float(step.abs().max()))
         nu_t = nu_t + step
-        if change[-1] < tol and _is_monotone_decreasing(residual):
+
+        if (
+            residual_norms[-1] < tol
+            and step_norms[-1] < tol
+            and _is_monotone_decreasing(residual_norms)
+        ):
             converged = True
             break
 
-    nu = 1.0 / Re_tau
-    dU_dy = U_TAU**2 * (1.0 - y / H) / (nu + nu_t)
     return SolveResult(
         y=y,
-        U=_cumulative_trapezoid(dU_dy, y),
+        U=_cumulative_trapezoid(_du_dy(nu_t, y, Re_tau), y),
         nu_t=nu_t,
-        iterations=len(residual),
+        iterations=len(residual_norms),
         converged=converged,
-        residual=residual,
-        change=change,
+        residual_norms=residual_norms,
+        step_norms=step_norms,
     )

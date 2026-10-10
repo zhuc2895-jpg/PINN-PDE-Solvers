@@ -85,7 +85,7 @@ def test_a_shear_dependent_closure_is_iterated_to_a_fixed_point():
 def test_the_reported_residual_history_is_monotone_on_a_converged_solve():
     result = solve_channel(ShearDependentEddyViscosity(), 395.0, tol=1e-12)
     assert result.converged
-    assert all(b <= a for a, b in zip(result.residual, result.residual[1:]))
+    assert all(b <= a for a, b in zip(result.residual_norms, result.residual_norms[1:]))
 
 
 def test_under_relaxation_buys_iterations():
@@ -122,7 +122,7 @@ def test_a_diverging_coupling_is_reported_not_hidden():
     assert not result.converged
     assert result.iterations == 60
     # ...and the history must show it rather than looking like a settled solve.
-    assert not (result.residual[-1] < result.residual[0])
+    assert not (result.residual_norms[-1] < result.residual_norms[0])
 
 def test_the_default_grid_resolves_a_real_eddy_viscosity_profile():
     """``nu_t`` spans four decades between the wall and the centre, so "the
@@ -143,3 +143,17 @@ def test_the_default_grid_resolves_a_real_eddy_viscosity_profile():
     )
     gap = np.linalg.norm(coarse.U.numpy().ravel() - reference) / np.linalg.norm(reference)
     assert gap < 1e-4
+
+def test_a_tiny_relaxation_factor_cannot_manufacture_convergence():
+    """The relaxed step is ``alpha * residual``, so a small ``alpha`` makes the
+    step small no matter how far from a fixed point the iterate is.
+
+    Judging convergence by the step alone therefore lets the caller dial in a
+    "converged" answer for a closure that has no fixed point at all.  The
+    residual itself has to be small -- that is the bind the criterion needs.
+    """
+    closure = AntiDampedEddyViscosity()  # no fixed point
+    result = solve_channel(closure, 395.0, alpha=1e-10, tol=1e-10, max_iter=20)
+
+    assert not result.converged
+    assert result.residual_norms[-1] > 1e-2
