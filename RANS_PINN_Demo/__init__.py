@@ -22,6 +22,20 @@ from .experiment import (
     run_experiment,
     save_experiment,
 )
+from .inversion import (
+    BandSensitivity,
+    EddyViscosityInversion,
+    ErrorDecomposition,
+    IdentifiabilityReport,
+    InversionAnalysis,
+    TabulatedClosure,
+    analyze_inversion,
+    decompose_errors,
+    identifiability_report,
+    invert_eddy_viscosity,
+    replay_error,
+    save_inversion_artifacts,
+)
 from .solver import SolveResult, solve_channel, wall_clustered_grid
 
 __all__ = [
@@ -47,4 +61,16 @@ __all__ = [
     "ExperimentResult",
     "run_experiment",
     "save_experiment",
+    "EddyViscosityInversion",
+    "TabulatedClosure",
+    "ErrorDecomposition",
+    "BandSensitivity",
+    "IdentifiabilityReport",
+    "InversionAnalysis",
+    "invert_eddy_viscosity",
+    "replay_error",
+    "decompose_errors",
+    "identifiability_report",
+    "analyze_inversion",
+    "save_inversion_artifacts",
 ]

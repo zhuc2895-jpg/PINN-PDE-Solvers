@@ -1,0 +1,29 @@
+[
+  {
+    "Re_tau": 180.0,
+    "inversion_relative_error": 2.1049504581386826e-11,
+    "replay_relative_error": 5.5158665264653496e-17,
+    "closure_relative_l2": 0.11588111343694117,
+    "discretization_relative_l2": 4.935464515349727e-06,
+    "centreline_identifiable": false,
+    "overall_identifiable": false,
+    "unidentifiable_bands": [
+      "centreline"
+    ],
+    "status": "partially_identifiable"
+  },
+  {
+    "Re_tau": 395.0,
+    "inversion_relative_error": 4.136792601781946e-11,
+    "replay_relative_error": 1.210741346138744e-16,
+    "closure_relative_l2": 0.14095240154737,
+    "discretization_relative_l2": 1.079940241314582e-05,
+    "centreline_identifiable": false,
+    "overall_identifiable": false,
+    "unidentifiable_bands": [
+      "375.25-395",
+      "centreline"
+    ],
+    "status": "partially_identifiable"
+  }
+]
