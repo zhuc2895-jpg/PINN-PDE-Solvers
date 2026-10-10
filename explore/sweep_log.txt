@@ -1,0 +1,15 @@
+device=cpu
+
+[1] all four PDEs through the same sample/losses/weights seam (300 epochs each)
+  2d-poisson                loss 9.28e+01 -> 1.03e-01 (0.001x)  terms=['bc', 'pde']  ( 6.4s)
+  2d-convection-diffusion   loss 6.58e+00 -> 4.48e-02 (0.007x)  terms=['bc', 'pde']  (20.2s)
+  1d-burgers                loss 6.16e-01 -> 1.38e-01 (0.224x)  terms=['bc', 'ic', 'pde']  (23.1s)
+  2d-lid-driven-cavity      loss 3.35e+00 -> 3.22e-01 (0.096x)  terms=['bc', 'cont', 'mom_x', 'mom_y']  (21.8s)
+
+[2] 2-D Poisson network sweep, 1500 epochs, relative L2 on a 128x128 grid
+  mlp-tanh (current)      L2=1.283e-01  final_loss=1.055e-02  ( 29.8s)
+  mlp-tanh+fourier        L2=6.953e-02  final_loss=1.039e-01  ( 36.7s)
+  mlp-sin (SIREN init)    L2=9.876e-01  final_loss=7.961e+00  ( 31.7s)
+  mlp-silu                L2=1.581e-01  final_loss=1.537e-01  ( 50.0s)
+
+referring to the committed scripts: pinn_2d_poisson.py reaches 0.110987 (11.10%)

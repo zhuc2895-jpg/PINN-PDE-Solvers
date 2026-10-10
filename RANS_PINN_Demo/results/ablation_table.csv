@@ -1,0 +1,4 @@
+axis,ablated_arm,budget,Re_tau,full_corrected_rel_l2_mean,ablated_corrected_rel_l2_mean,relative_error_increase,full_improvement_mean,ablated_improvement_mean,improvement_drop,full_converged_all,ablated_converged_all,passed,status,detail
+structure,A1,12,590.0,0.019943070036210046,0.6666840910132005,32.42936116669709,0.8809022459534456,-2.9813618341647286,3.862264080118174,True,False,False,fail,ablated solver did not converge for every seed
+rans_residual,A2,12,590.0,0.019943070036210046,0.019943073321211136,1.647189267206528e-07,0.8809022459534456,0.8809022263357913,1.9617654278825114e-08,True,True,False,fail,relative error increase is below the pre-registered threshold
+smoothness,A3,12,590.0,0.019943070036210046,0.013361218731644114,-0.3300320007208247,0.8809022459534456,0.9202083160027866,-0.03930607004934106,True,True,False,fail,relative error increase is below the pre-registered threshold

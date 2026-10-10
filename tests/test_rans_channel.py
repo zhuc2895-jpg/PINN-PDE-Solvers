@@ -1,0 +1,212 @@
+"""``ChannelProblem``: the demo posed behind the existing ``PDEProblem`` seam.
+
+The point of this file is that ``pinn.trainer.train`` drives it *unchanged* --
+the network corrects a closure, the velocity profile comes out of the coupling
+solve, and the shared trainer never learns that anything unusual is going on.
+"""
+
+from typing import Optional
+
+import torch
+
+from pinn.model import MLP
+from pinn.trainer import TrainConfig, train
+
+from RANS_PINN_Demo.ablations import (
+    ALL_OFF,
+    AMPLITUDE_LOSS_WEIGHT,
+    RANS_LOSS_WEIGHT,
+    SMOOTH_LOSS_WEIGHT,
+)
+from RANS_PINN_Demo.channel import (
+    DATA_BUDGETS,
+    MODEL_INPUTS,
+    ChannelClosure,
+    ChannelProblem,
+    _strata,
+    stratified_points,
+)
+from RANS_PINN_Demo.solver import solve_channel as run_solver
+from RANS_PINN_Demo.solver import wall_clustered_grid
+
+
+def _model(in_dim: int = 3) -> MLP:
+    return MLP(in_dim, 1, width=16, depth=2, seed=0)
+
+
+def test_channel_problem_drives_the_shared_trainer_unchanged():
+    """No adapter, no subclass of the trainer: the four protocol methods are the
+    whole contract, exactly as they are for the PDE plugins in ``pinn/``."""
+    problem = ChannelProblem()
+    history = train(
+        problem,
+        _model(),
+        TrainConfig(epochs=3, n_interior=8, device="cpu", verbose=False),
+    )
+    assert set(history) == {"data", "rans", "smooth", "amplitude", "total"}
+    assert len(history["total"]) == 3
+    assert all(v == v for v in history["total"])  # no NaN
+
+
+def test_channel_problem_reports_the_protocol_attributes():
+    problem = ChannelProblem()
+    assert problem.name
+    assert problem.coords == MODEL_INPUTS
+    assert problem.out_dim == 1
+    assert problem.loss_weights() == {
+        "data": 1.0,
+        "rans": RANS_LOSS_WEIGHT,
+        "smooth": SMOOTH_LOSS_WEIGHT,
+        "amplitude": AMPLITUDE_LOSS_WEIGHT,
+    }
+    assert problem.exact({}) is None
+
+# --- observation placement ----------------------------------------------------
+
+
+def test_data_budgets_are_nested_not_three_unrelated_clouds():
+    """Otherwise the data-volume curve measures placement and volume at once,
+    and a difference between budgets cannot be attributed to either."""
+    for Re_tau in (180.0, 395.0, 590.0):
+        eight = set(stratified_points(8, Re_tau).reshape(-1).tolist())
+        twelve = set(stratified_points(12, Re_tau).reshape(-1).tolist())
+        sixteen = set(stratified_points(16, Re_tau).reshape(-1).tolist())
+        assert eight < twelve < sixteen
+
+
+def test_observations_reach_from_the_buffer_layer_to_the_centreline():
+    Re_tau = 590.0
+    y_plus = stratified_points(16, Re_tau).reshape(-1) * Re_tau
+    assert y_plus.min() <= 3.0 + 1e-9
+    assert y_plus.max() >= 0.97 * Re_tau
+    # every band gets a say, not just the two extremes
+    for lo, hi in _strata(Re_tau):
+        inside = ((y_plus >= lo - 1e-9) & (y_plus <= hi + 1e-9)).sum()
+        assert inside >= 2
+
+
+def test_no_observation_point_lands_on_the_evaluation_grid():
+    """Scoring happens on the dense grid; if an observation sat on it, the
+    "prediction" error there would be partly a fitted quantity."""
+    grid = wall_clustered_grid().reshape(-1)
+    for Re_tau in (180.0, 395.0, 590.0):
+        for budget in DATA_BUDGETS:
+            for value in stratified_points(budget, Re_tau).reshape(-1):
+                assert torch.all((grid - value).abs() > 1e-12)
+
+
+def test_the_budget_has_to_be_one_that_keeps_the_sets_nested():
+    import pytest
+
+    with pytest.raises(ValueError, match="nested"):
+        stratified_points(10, 395.0)
+
+
+# --- noise -------------------------------------------------------------------
+
+
+def test_noise_perturbs_observations_by_roughly_one_percent():
+    problem = ChannelProblem(Re_taus=(395.0,), noise=0.01)
+    data = problem.sample(16, 0, 0, torch.device("cpu"))
+    y = data["interior"].coords["y"]
+    observed = data["interior"].targets["U"]
+    clean = problem.reference(y, 395.0)
+
+    relative = ((observed - clean).abs() / clean.abs()).max().item()
+    assert relative > 0.0
+    assert relative < 0.05
+
+
+def test_the_reference_is_noise_free_and_repeatable():
+    problem = ChannelProblem(Re_taus=(395.0,), noise=0.01)
+    y = stratified_points(16, 395.0)
+    assert torch.equal(problem.reference(y, 395.0), problem.reference(y, 395.0))
+
+
+def test_observation_noise_is_reproducible_for_a_seed():
+    def draw():
+        problem = ChannelProblem(Re_taus=(395.0,), seed=7)
+        return problem.sample(8, 0, 0, torch.device("cpu"))["interior"].targets["U"]
+
+    assert torch.equal(draw(), draw())
+
+# --- the path has to be differentiable end to end -----------------------------
+
+
+def test_the_learned_closure_makes_the_inner_solve_a_real_fixed_point():
+    """ADR-0001's premise, pinned: because the correction sees the local shear,
+    the profile is a fixed point rather than one quadrature.
+
+    If this ever collapses to a single iteration, the coupling story in H3 has
+    quietly stopped being about anything.
+    """
+    problem = ChannelProblem()
+    model = MLP(3, 1, width=16, depth=2, seed=0)
+    solved = run_solver(
+        ChannelClosure(model, problem.base), 395.0, max_iter=problem.solve_max_iter
+    )
+    assert solved.iterations > 1
+
+
+def test_data_only_training_reduces_the_observation_loss():
+    """T4's acceptance: the seam is not merely drivable, it learns.
+
+    Data loss only -- no RANS residual, no physics term.  Those arrive in T5.
+    What is being shown here is that the path from a network parameter, through
+    the fixed point, to a solved profile is differentiable end to end.
+    """
+    problem = ChannelProblem(ablation=ALL_OFF)
+    model = MLP(3, 1, width=32, depth=2, seed=0)
+    history = train(
+        problem,
+        model,
+        TrainConfig(epochs=60, n_interior=16, device="cpu", verbose=False, lr=1e-2),
+    )
+    assert history["data"][-1] < 0.25 * history["data"][0]
+
+def test_the_observation_bands_do_not_spend_budget_on_duplicates():
+    """Adjacent bands used to share an edge, so 16 "points" were really 13 and
+    three of them carried triple weight in the loss."""
+    for Re_tau in (180.0, 395.0, 590.0):
+        for budget in DATA_BUDGETS:
+            points = stratified_points(budget, Re_tau).reshape(-1)
+            assert points.numel() == budget
+            assert len(set(points.tolist())) == budget
+
+
+def test_stratification_survives_at_the_lowest_training_reynolds_number():
+    """At Re_tau = 180 a fixed wall-unit log band inverts (30 > 0.15 * 180), which
+    silently reordered the bands. Placement now has to hold at every Re_tau."""
+    for Re_tau in (180.0, 395.0, 590.0):
+        y_plus = stratified_points(16, Re_tau).reshape(-1) * Re_tau
+        bands = _strata(Re_tau)
+        assert all(lo < hi for lo, hi in bands), bands
+        for lo, hi in bands:
+            assert ((y_plus >= lo - 1e-9) & (y_plus <= hi + 1e-9)).any()
+
+
+def test_the_model_can_be_built_straight_from_the_protocol_coords():
+    """``coords`` is the model's input layout, so the idiomatic construction --
+    ``MLP(len(problem.coords), problem.out_dim)`` -- has to be the right shape."""
+    problem = ChannelProblem()
+    model = MLP(len(problem.coords), problem.out_dim, width=8, depth=2, seed=0)
+    data = problem.sample(8, 0, 0, torch.device("cpu"))
+    assert set(problem.losses(model, data)) == {"data", "rans", "smooth", "amplitude"}
+
+
+def test_the_inner_solve_converges_at_the_training_tolerance():
+    """The tolerance has to clear the float32 network's own precision floor.
+
+    At 1e-10 the solve burned its whole budget stalled at ~2e-9 and ``losses``
+    trained on a non-converged iterate without saying so.
+    """
+    problem = ChannelProblem()
+    model = MLP(len(problem.coords), problem.out_dim, width=16, depth=2, seed=0)
+    for Re_tau in problem.Re_taus:
+        solved = run_solver(
+            ChannelClosure(model, problem.base),
+            Re_tau,
+            max_iter=problem.solve_max_iter,
+            tol=problem.solve_tol,
+        )
+        assert solved.converged, solved.residual_norms[-3:]
