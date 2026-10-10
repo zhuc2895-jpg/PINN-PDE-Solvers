@@ -22,6 +22,17 @@ from .ablations import (
 )
 from .channel import MODEL_INPUTS, ChannelClosure, ChannelProblem
 from .closure import BaselineClosure, Closure, TruthClosure
+from .coupling import (
+    ALPHAS,
+    CouplingResult,
+    CouplingRun,
+    classify_coupling_status,
+    plot_coupling_history,
+    run_alpha_scan,
+    run_coupling_experiment,
+    save_coupling_artifacts,
+    train_frozen_full_model,
+)
 from .experiment import (
     ABLATION_RELATIVE_ERROR_INCREASE_TARGET,
     EXTRAPOLATION_BUDGET,
@@ -54,6 +65,15 @@ from .solver import SolveResult, solve_channel, wall_clustered_grid
 
 __all__ = [
     "Closure",
+    "ALPHAS",
+    "CouplingRun",
+    "CouplingResult",
+    "classify_coupling_status",
+    "train_frozen_full_model",
+    "run_alpha_scan",
+    "run_coupling_experiment",
+    "save_coupling_artifacts",
+    "plot_coupling_history",
     "BaselineClosure",
     "TruthClosure",
     "SolveResult",
