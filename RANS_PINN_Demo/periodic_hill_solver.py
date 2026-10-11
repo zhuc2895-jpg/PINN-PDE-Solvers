@@ -19,13 +19,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .periodic_hill import (
-    BULK_VELOCITY,
-    CHANNEL_HEIGHT,
-    KINEMATIC_VISCOSITY,
-    PERIOD,
-    REFERENCE_STATIONS,
-    hill_height,
+from .periodic_hill import BULK_VELOCITY, CHANNEL_HEIGHT, PERIOD, hill_height
+from .periodic_hill_observables import (
+    separation_reattachment as _separation_reattachment,
+    wall_shear_profile as _wall_shear_profile,
 )
 
 __all__ = [
@@ -106,6 +103,8 @@ class PeriodicHillSolution:
     dy: float
     f0: float
     nu: float
+    length: float = 0.0
+    height: float = 0.0
     q_history: List[float] = field(default_factory=list)
     change_history: List[float] = field(default_factory=list)
     iterations: int = 0
@@ -472,6 +471,8 @@ class PeriodicHillSolver:
                     dy=self.dy,
                     f0=self.f0,
                     nu=self.nu,
+                    length=self.length,
+                    height=self.height,
                     q_history=q_history,
                     change_history=change_history,
                     iterations=step + 1,
@@ -487,6 +488,8 @@ class PeriodicHillSolver:
             dy=self.dy,
             f0=self.f0,
             nu=self.nu,
+            length=self.length,
+            height=self.height,
             q_history=q_history,
             change_history=change_history,
             iterations=max_steps,
@@ -527,70 +530,20 @@ def wall_shear_profile(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Return ``(x_u, tau_w)`` for a solved periodic-hill field.
 
-    The wall is the first solid/fluid interface above the hill.  A linear fit
-    through the first two fluid u samples is extrapolated to the wall and
-    multiplied by the effective viscosity at the wall.  The default uses the
-    molecular viscosity because the mixing-length model enforces ``nu_t=0`` at
-    the wall; a learned correction must pass its wall effective viscosity
-    explicitly through ``wall_effective_viscosity`` and preserve that limit.
+    Thin adapter over :func:`periodic_hill_observables.wall_shear_profile`;
+    the wall-normal gradient and the wall effective viscosity live in the
+    observable module.  ``u_tau`` is not a parameter here -- it is inferred
+    inside the observable module from the computed stress (ADR-0003).
     """
-    u = solution.u
-    x = solution.x_u
-    y = solution.y_c
-    dx = solution.dx
-    dy = solution.dy
-    nx, ny = u.shape
-    # Reconstruct the hill height from the solution coordinates.  The first
-    # fluid index is the first cell whose centre is above b(x).
-    b = hill_height(x)
-    if wall_effective_viscosity is None:
-        wall_viscosity = np.full(nx, solution.nu, dtype=float)
-    else:
-        wall_viscosity = np.asarray(wall_effective_viscosity, dtype=float)
-        if wall_viscosity.shape != (nx,):
-            raise ValueError("wall_effective_viscosity must have shape (nx,)")
-    tau = np.full(nx, np.nan)
-    for i in range(nx):
-        fluid = np.where(y > b[i] + 1e-12)[0]
-        if fluid.size < 2:
-            continue
-        j0 = int(fluid[0])
-        j1 = int(fluid[1])
-        # Linear fit u = a + b*y through the first two fluid samples; the
-        # wall gradient is the slope at y=b.
-        slope = (u[i, j1] - u[i, j0]) / (y[j1] - y[j0])
-        tau[i] = wall_viscosity[i] * slope
-    return x, tau
+    profile = _wall_shear_profile(solution, wall_effective_viscosity)
+    return profile.x_over_h, profile.tau_w
 
 
 def separation_reattachment(
     solution: PeriodicHillSolution,
 ) -> Tuple[Optional[float], Optional[float]]:
-    """Return approximate ``(x_sep, x_reattach)`` from wall-shear sign changes.
+    """Return ``(x_sep, x_reattach)`` from wall-shear sign changes.
 
-    The periodic domain starts at the hill crest.  Separation is the first
-    positive-to-negative crossing after the crest; reattachment is the first
-    negative-to-positive crossing after that.
+    Delegates to :func:`periodic_hill_observables.separation_reattachment`.
     """
-    x, tau = wall_shear_profile(solution)
-    finite = np.isfinite(tau)
-    if finite.sum() < 3:
-        return None, None
-    # Work on the ordered x grid and interpolate sign changes linearly.
-    sign = np.sign(tau)
-    separation = None
-    reattachment = None
-    for i in range(len(x) - 1):
-        if not (finite[i] and finite[i + 1]):
-            continue
-        if sign[i] == sign[i + 1] or sign[i] == 0 or sign[i + 1] == 0:
-            continue
-        # Linear zero crossing.
-        t = tau[i] / (tau[i] - tau[i + 1])
-        xc = x[i] + t * (x[i + 1] - x[i])
-        if separation is None and tau[i] > 0.0 and tau[i + 1] < 0.0:
-            separation = float(xc)
-        elif separation is not None and reattachment is None and tau[i] < 0.0 and tau[i + 1] > 0.0:
-            reattachment = float(xc)
-            break
-    return separation, reattachment
+    return _separation_reattachment(solution)

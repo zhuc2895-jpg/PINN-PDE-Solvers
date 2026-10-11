@@ -92,6 +92,16 @@ from .periodic_hill import (
     reference_wall_shear,
     wall_normal_coordinate,
 )
+from .periodic_hill_observables import (
+    ForceBudget,
+    StationObservation,
+    WallShearProfile,
+    force_balance,
+    friction_velocity_profile,
+    reference_wall_shear_fit,
+    wall_shear_observations,
+)
+
 from .periodic_hill_solver import (
     PeriodicHillSolution,
     PeriodicHillSolver,
@@ -143,6 +153,13 @@ __all__ = [
     "solve_periodic_hill",
     "wall_shear_profile",
     "separation_reattachment",
+    "WallShearProfile",
+    "StationObservation",
+    "ForceBudget",
+    "friction_velocity_profile",
+    "reference_wall_shear_fit",
+    "wall_shear_observations",
+    "force_balance",
     "SolveResult",
     "solve_channel",
     "wall_clustered_grid",
