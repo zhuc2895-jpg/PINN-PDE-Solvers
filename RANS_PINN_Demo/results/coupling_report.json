@@ -12,6 +12,11 @@
   "status_counts": {
     "converged": 9
   },
+  "wall_shear_check": {
+    "kind": "constructed_identity",
+    "used_for_h3": false,
+    "reason": "u_tau is an input in the 1-D channel setup, so the wall shear is u_tau**2 by construction.  The 2-D criterion must infer friction velocity from an independently computed wall shear and force balance."
+  },
   "summary": [
     {
       "alpha": 0.2,

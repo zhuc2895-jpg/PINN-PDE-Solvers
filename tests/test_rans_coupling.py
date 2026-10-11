@@ -71,5 +71,7 @@ def test_alpha_scan_freezes_weights_and_archives_every_history(tmp_path):
     report = json.loads((out / "coupling_report.json").read_text(encoding="utf-8"))
     assert report["budget"] == 12
     assert report["Re_tau"] == 590.0
+    assert report["wall_shear_check"]["kind"] == "constructed_identity"
+    assert report["wall_shear_check"]["used_for_h3"] is False
     assert len(report["runs"]) == len(ALPHAS)
     assert all(run["model_weight_drift"] == 0.0 for run in report["runs"])

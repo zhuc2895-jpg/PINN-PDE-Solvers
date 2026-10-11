@@ -36,6 +36,7 @@ from .coupling import (
 from .deliverables import (
     PROFILE_RE_TAUS,
     DeliverableData,
+    build_adr_0003_markdown,
     build_adr_markdown,
     build_report_markdown,
     collect_deliverable_data,
@@ -71,6 +72,33 @@ from .inversion import (
     replay_error,
     save_inversion_artifacts,
 )
+from .wall_observables import (
+    WallShearObservation,
+    friction_velocity_from_wall_shear,
+    wall_force_balance_residual,
+    wall_shear_from_gradient,
+    wall_shear_relative_error,
+)
+
+from .periodic_hill import (
+    CHANNEL_HEIGHT,
+    PERIOD,
+    RE_H,
+    REFERENCE_STATIONS,
+    PeriodicHillProfile,
+    download_reference,
+    hill_height,
+    load_reference,
+    reference_wall_shear,
+    wall_normal_coordinate,
+)
+from .periodic_hill_solver import (
+    PeriodicHillSolution,
+    PeriodicHillSolver,
+    separation_reattachment,
+    solve_periodic_hill,
+    wall_shear_profile,
+)
 from .solver import SolveResult, solve_channel, wall_clustered_grid
 
 __all__ = [
@@ -90,10 +118,31 @@ __all__ = [
     "plot_velocity_profiles",
     "plot_eddy_viscosity_correction",
     "build_report_markdown",
+    "build_adr_0003_markdown",
     "build_adr_markdown",
     "generate_deliverables",
     "BaselineClosure",
     "TruthClosure",
+    "WallShearObservation",
+    "wall_shear_from_gradient",
+    "friction_velocity_from_wall_shear",
+    "wall_shear_relative_error",
+    "wall_force_balance_residual",
+    "CHANNEL_HEIGHT",
+    "PERIOD",
+    "RE_H",
+    "REFERENCE_STATIONS",
+    "PeriodicHillProfile",
+    "hill_height",
+    "wall_normal_coordinate",
+    "download_reference",
+    "load_reference",
+    "reference_wall_shear",
+    "PeriodicHillSolution",
+    "PeriodicHillSolver",
+    "solve_periodic_hill",
+    "wall_shear_profile",
+    "separation_reattachment",
     "SolveResult",
     "solve_channel",
     "wall_clustered_grid",

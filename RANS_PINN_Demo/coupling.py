@@ -113,9 +113,13 @@ def _parameter_drift(
 def _wall_shear_plus(solved: SolveResult, Re_tau: float) -> float:
     """One-sided wall derivative in wall units, from the solved profile.
 
-    The first cell is intentionally used instead of reading the analytic stress
-    relation back out: the latter would make every closure look exact by
-    construction and would not test the coupled profile.
+    In this 1-D demo this is a numerical *consistency identity*, not a physical
+    validation metric.  ``u_tau`` is an input (``u_tau = 1``), the profile is
+    obtained from the same total-stress relation, and the structured closure has
+    ``nu_t(0) = 0``.  Therefore the recovered value must be ``u_tau**2 = 1`` by
+    construction.  It is retained only to catch an implementation regression; a
+    2-D experiment must infer ``u_tau`` from a wall shear computed without a
+    prescribed value and must use an independent force-balance/reference test.
     """
     if solved.y.numel() < 2 or float(solved.y[1] - solved.y[0]) == 0.0:
         raise ValueError("wall shear requires at least two distinct grid points")
@@ -444,6 +448,16 @@ def save_coupling_artifacts(
         "status_counts": dict(
             Counter(run.status for run in result.runs)
         ),
+        "wall_shear_check": {
+            "kind": "constructed_identity",
+            "used_for_h3": False,
+            "reason": (
+                "u_tau is an input in the 1-D channel setup, so the wall shear "
+                "is u_tau**2 by construction.  The 2-D criterion must infer "
+                "friction velocity from an independently computed wall shear "
+                "and force balance."
+            ),
+        },
         "summary": result.summary_rows,
         "runs": [
             {

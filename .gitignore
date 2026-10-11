@@ -50,3 +50,7 @@ desktop.ini
 
 # Throwaway demos / scratch runs
 scratch/
+
+# Third-party periodic-hill reference data (CC BY-NC-SA; fetched on demand)
+RANS_PINN_Demo/reference/periodic_hill/perh-allfiles.zip
+RANS_PINN_Demo/reference/periodic_hill/extracted/
