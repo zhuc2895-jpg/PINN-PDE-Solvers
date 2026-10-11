@@ -46,6 +46,7 @@ __all__ = [
     "plot_eddy_viscosity_correction",
     "build_report_markdown",
     "build_adr_markdown",
+    "build_adr_0003_markdown",
     "generate_deliverables",
 ]
 
@@ -321,6 +322,23 @@ def build_report_markdown(
     inversion_closure_share = min(
         float(entry["closure_share"]) for entry in _csv_rows(results_dir / "inversion_error_table.csv")
     )
+    audit_path = results_dir / "budget_sensitivity.json"
+    audit_by_cell = {}
+    if audit_path.exists():
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        audit_by_cell = {
+            (str(row["arm"]), int(row["budget"])): row for row in audit["summary"]
+        }
+
+    def audit_text(arm: str, budget: int) -> str:
+        row = audit_by_cell.get((arm, budget))
+        if row is None:
+            return "审计结果缺失"
+        return (
+            f"{int(row['n_converged'])}/{int(row['n_seeds'])} 收敛"
+            f"（无噪声对照 {int(row['noise_free_converged'])}"
+            f"/{int(row['n_noise_free_controls'])}）"
+        )
 
     axis_lines = []
     for row in ablation:
@@ -344,15 +362,15 @@ def build_report_markdown(
 
     return f"""# RANS + PINN 神经残差修正 Demo：一页论证报告
 
-**决定：{profile_decision}。** 预先注册的 H1/H2/H3 均通过；但三根物理轴中只有结构约束产生了可测的边际作用，A2/A3 的单轴归因不通过。进入二维时不能把本 Demo 描述成“所有物理约束都有效”。
+**决定：{profile_decision}。** 预先注册的主判据 H1/H2/H3 均通过；但 A2/A3 的单轴归因不通过，结构轴的优势又受 12 档噪声脆弱性限制，不能宣称三根轴或结构轴已经产生稳健的边际作用。进入二维时不能把本 Demo 描述成“所有物理约束都有效”。
 
 ## 结论
 
 **H1（残差存在且可参数化）：通过，但有可辨识性边界。** 基准-真值误差中闭合误差占 {100.0 * inversion_closure_share:.2f}% 以上；反演重放误差约 {max(float(entry['replay_relative_error']) for entry in inversion):.1e}。中心线应力因子为零，395 的最外层 5% 也低于可辨识性下限，因此 H1 只对壁面到外层的大部分区域成立。
 
-**H2（物理约束改善外推）：通过主判据，但归因是混合的。** 冻结超参下，full 臂在训练 Reτ=180/395 的改善为 {_percent(float(t180['improvement_mean']))} / {_percent(float(t395['improvement_mean']))}；在未见 Reτ=590 为 {_percent(float(t590['improvement_mean']))} +/- {_percent(float(t590['improvement_std']))}，预注册 30% 阈值通过。纯数据 `all_off` 在第 12 档有 1 个种子不收敛，full 三个种子均收敛，说明结构约束主要买到稳定性；但逐轴消融均未通过“误差至少增加 10%”的预注册归因判据。
+**H2（物理约束改善外推）：通过主判据，但归因是混合的。** 冻结超参下，full 臂在训练 Reτ=180/395 的改善为 {_percent(float(t180['improvement_mean']))} / {_percent(float(t395['improvement_mean']))}；在未见 Reτ=590 为 {_percent(float(t590['improvement_mean']))} +/- {_percent(float(t590['improvement_std']))}，预注册 30% 阈值通过。20-seed 预算审计显示：8/16 档的 `all_off`/`full` 均为 20/20 收敛；12 档分别为 {audit_text('all_off', 12)} 和 {audit_text('full', 12)}，且三个无噪声对照全部收敛。12 档的失败是观测噪声实现与优化路径的交互，不是数据量单调效应，也不能把 `full` 的三个原始种子当作结构约束稳定性的充分证据；逐轴消融仍未通过“误差至少增加 10%”的预注册归因判据。
 
-**H3（冻结耦合稳定）：通过。** 3 个种子 × 3 个 α 共 9/9 收敛，权重漂移为 0；α=1.0/0.5/0.2 的平均迭代次数为 {float(coupling_by_alpha[1.0]['iterations_mean']):.1f}/{float(coupling_by_alpha[0.5]['iterations_mean']):.1f}/{float(coupling_by_alpha[0.2]['iterations_mean']):.1f}，壁面剪应力误差约 {float(coupling_by_alpha[1.0]['wall_shear_rel_error_mean']):.1e}。欠松弛提高稳定性但显著增加迭代成本。
+**H3（冻结耦合稳定）：通过，但壁面剪应力不是有效判据。** 3 个种子 × 3 个 α 共 9/9 收敛，权重漂移为 0；α=1.0/0.5/0.2 的平均迭代次数为 {float(coupling_by_alpha[1.0]['iterations_mean']):.1f}/{float(coupling_by_alpha[0.5]['iterations_mean']):.1f}/{float(coupling_by_alpha[0.2]['iterations_mean']):.1f}。一维中 `u_tau` 是输入，壁面剪应力由总应力关系直接构造，表中约 4e-11 的残差只是实现一致性检查，不能证明耦合预测了真实壁面剪应力。二维必须按 `ADR-0003` 从壁面法向梯度和有效黏度反推 `τ_w/u_tau`，并要求与独立高保真参考及整体力平衡一致。
 
 ## 单轴归因（不美化）
 
@@ -362,9 +380,11 @@ def build_report_markdown(
 
 ## 耦合扫描
 
-| alpha | 收敛 | 迭代次数 mean +/- std | 最终剖面相对误差 | 壁面剪应力相对误差 | 权重漂移 |
+| alpha | 收敛 | 迭代次数 mean +/- std | 最终剖面相对误差 | 壁面剪应力恒等式残差（非判据） | 权重漂移 |
 |---:|---:|---:|---:|---:|---:|
 {chr(10).join(alpha_lines)}
+
+> 表内壁面剪应力列在 1-D 设置中是构造恒等式，只用于回归检查；`ADR-0003` 规定了 2-D 的反推壁面剪应力与力平衡判据。
 
 ## 必出图
 
@@ -380,10 +400,11 @@ def build_report_markdown(
 - [单轴消融表](../results/ablation_table.csv)
 - [预注册判据表](../results/criteria.csv)
 - [耦合扫描汇总](../results/coupling_summary.csv)
+- [预算稳定性审计](../results/budget_sensitivity.csv)
 
 ## 边界与停止条件
 
-本 Demo 使用合成真值、平衡槽道和单套闭合形式，不能替代 DNS/LES。若进入二维，应保留“结构约束带来稳定性、RANS 残差与平滑项未显示边际收益”的原结论，并把中心线/外层不可辨识性列为后续观测设计问题，而不是事后删除。
+本 Demo 使用合成真值、平衡槽道和单套闭合形式，不能替代 DNS/LES。进入二维时必须保留“A2/A3 未显示边际收益、12 档存在噪声敏感的优化脆弱性”这两个零结果；不得再把 12 档的单次失败写成普遍的结构稳定性证据。壁面剪应力判据必须按 `ADR-0003` 在二维重做，并把中心线/外层不可辨识性列为观测设计问题，而不是事后删除。
 """
 
 
@@ -392,7 +413,7 @@ def build_adr_markdown() -> str:
 
 ## Status
 
-Accepted.
+Accepted.  Superseded in part by ADR-0003.
 
 ## Context
 
@@ -413,6 +434,35 @@ Accepted.
 - 许可继续二维方法开发，但二维结果必须重新做泄漏隔离、冻结超参和逐种子报告。
 - 若二维中结构约束不再带来稳定性，停止扩展，转向弱耦合或混合数值方法。
 - ADR-0001 的 solver-in-the-loop 决定继续有效。
+"""
+
+
+def build_adr_0003_markdown() -> str:
+    return """# ADR-0003: 二维入口的两个修正条件
+
+## Status
+
+Accepted.  Supersedes the unqualified stability interpretation in ADR-0002.
+
+## Context
+
+进入二维前发现两个不能带进新实验的解释问题：
+
+1. 一维槽道中 ``u_tau`` 是输入，壁面总应力关系直接给出 ``tau_w = u_tau**2``。当前的约 ``4e-11`` 壁面剪应力误差是构造恒等式的数值残差，不是独立预测。
+2. 原始 3-seed 外推扫描把 12 档的一次非收敛写成了结构约束的稳定性优势。20-seed 审计在 8/12/16 档上得到：``all_off`` 的失败数为 0/2/0，``full`` 为 0/1/0；12 档针对失败种子的三组无噪声对照全部收敛。因而 12 档悬崖是噪声实现与优化路径的交互，不是数据量或结构的单调证据。
+
+## Decision
+
+1. 一维 H3 只保留冻结权重漂移、固定点收敛和剖面误差；壁面剪应力恒等式只作实现回归检查，不能作为通过判据。
+2. 二维壁面剪应力必须从解出的壁面法向速度梯度和有效黏度计算，并由 ``u_tau = sqrt(abs(tau_w))`` 反推摩擦速度；不得把 ``u_tau`` 作为自由输入。可执行接口见 ``RANS_PINN_Demo/wall_observables.py``。
+3. 二维 H3 至少同时检查：局部 ``tau_w`` 相对高保真参考误差、周期/整体动量力平衡残差、固定点收敛和逐种子失败率。阈值必须在二维训练前预注册。
+4. 任何预算结论至少覆盖两个嵌套预算和 20 个种子；求解器不收敛是独立失败类别，不能把末次迭代的巨大误差拿来平均。
+
+## Consequences
+
+- ADR-0002 的二维许可仍然有效，但“结构约束带来稳定性”的表述降级为待二维验证的假设。
+- 二维实现必须先建立可信的壁面剪应力/力平衡观测，再谈神经修正的边际贡献。
+- 审计数据位于 ``RANS_PINN_Demo/results/budget_sensitivity.csv`` 与 ``budget_sensitivity.json``。
 """
 
 
@@ -471,6 +521,10 @@ def generate_deliverables(
     _write_text(
         Path(docs_dir) / "adr" / "0002-proceed-to-2d-periodic-hill.md",
         build_adr_markdown(),
+    )
+    _write_text(
+        Path(docs_dir) / "adr" / "0003-2d-entry-corrections.md",
+        build_adr_0003_markdown(),
     )
 
 

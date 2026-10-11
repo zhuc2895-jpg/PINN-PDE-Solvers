@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from RANS_PINN_Demo.deliverables import (
+    build_adr_0003_markdown,
     build_adr_markdown,
     build_report_markdown,
     collect_deliverable_data,
@@ -38,6 +39,15 @@ def test_adr_records_the_2d_decision_and_caveat():
     assert "Accepted" in adr
     assert "二维周期性山丘" in adr
     assert "A2/A3" in adr
+
+
+def test_adr_0003_removes_the_constructed_wall_shear_criterion():
+    adr = build_adr_0003_markdown()
+    assert "ADR-0003" in adr
+    assert "构造恒等式" in adr
+    assert "20-seed" in adr
+    assert "u_tau" in adr
+    assert "力平衡" in adr
 
 
 def test_t9_profile_figures_can_be_generated(tmp_path):
