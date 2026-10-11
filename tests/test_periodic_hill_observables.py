@@ -18,8 +18,10 @@ from RANS_PINN_Demo.periodic_hill import KINEMATIC_VISCOSITY, PeriodicHillProfil
 from RANS_PINN_Demo.periodic_hill_observables import (
     ForceBudget,
     StationObservation,
+    WallShearProfile,
     force_balance,
     friction_velocity_profile,
+    hill_wall_diagnostics,
     reference_wall_shear_fit,
     separation_reattachment,
     wall_shear_observations,
@@ -196,3 +198,52 @@ def test_separation_reattachment_returns_none_without_sign_change():
     solution = _flat_solution(nx=4)
     solution.u[:, 0] = 1.0
     assert separation_reattachment(solution) == (None, None)
+
+def test_body_force_excludes_solid_hill_area():
+    """F_body must integrate f0 over fluid u-cells only, not the whole box."""
+    # Construct a field on real hill geometry (x=0 column sits on the hill).
+    solution = _flat_solution(nu=0.5, f0=2.0)
+    solution.x_u = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+    _parabola(solution, forcing=solution.f0)
+    budget = force_balance(solution)
+    from RANS_PINN_Demo.periodic_hill import hill_height
+
+    b = hill_height(solution.x_u)
+    solid = np.sum(solution.y_c[None, :] < b[:, None] + 1e-12) * solution.dx * solution.dy
+    assert budget.body == pytest.approx(solution.f0 * (solution.height * solution.length - solid))
+
+
+def test_hill_pressure_drag_is_negative_on_a_rising_face():
+    """A windward face with positive pressure must push the fluid backwards."""
+    solution = _flat_solution(nx=4, nu=0.5, f0=0.0)
+    solution.x_u = np.array([0.0, 1.0, 2.0, 3.0])
+    # Higher pressure on the windward face than the lee face -> net drag.
+    solution.pressure[:] = np.array([[1.0], [2.0], [3.0], [4.0]])
+    budget = force_balance(solution)
+    assert budget.pressure_hill < 0.0
+
+
+def test_wall_shear_rejects_nonpositive_effective_viscosity_in_force_balance():
+    solution = _flat_solution()
+    _parabola(solution, forcing=1.0)
+    with pytest.raises(ValueError):
+        force_balance(solution, wall_effective_viscosity=np.zeros(solution.u.shape[0]))
+
+
+def test_separation_reattachment_handles_exact_zero_node():
+    solution = _flat_solution(nx=7, ny=3, dx=1.0, dy=1.0, nu=1.0)
+    # tau_i ~ -u_i0, so u0=[-,-,0,+,+,-,-] gives tau=[+,+,0,-,-,+,+]: a root
+    # exactly on the node at x=4, then a - -> + crossing between x=6 and x=7.
+    solution.u[:, 0] = np.array([-1.0, -1.0, 0.0, 1.0, 1.0, -1.0, -1.0])
+    separation, reattachment = separation_reattachment(solution)
+    assert separation == pytest.approx(4.0)
+    assert reattachment == pytest.approx(6.5)
+
+
+def test_hill_wall_diagnostics_reports_both_together():
+    solution = _flat_solution(nu=0.5, f0=2.0)
+    _parabola(solution, forcing=solution.f0)
+    profile, budget, observations = hill_wall_diagnostics(solution)
+    assert isinstance(profile, WallShearProfile)
+    assert isinstance(budget, ForceBudget)
+    assert observations == []

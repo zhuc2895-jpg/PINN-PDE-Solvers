@@ -44,6 +44,7 @@ __all__ = [
     "reference_wall_shear_fit",
     "wall_shear_observations",
     "force_balance",
+    "hill_wall_diagnostics",
     "separation_reattachment",
 ]
 
@@ -270,6 +271,8 @@ def _wall_shear_forces(
         mu_bottom = np.asarray(wall_effective_viscosity, dtype=float)
         if mu_bottom.shape != (nx,):
             raise ValueError("wall_effective_viscosity must have shape (nx,)")
+        if np.any(~np.isfinite(mu_bottom)) or np.any(mu_bottom <= 0.0):
+            raise ValueError("wall_effective_viscosity must be finite and positive")
 
     grad_bottom = _wall_gradient_from_solution(u, y_c, b, chi, dy)
     tau_bottom = mu_bottom * grad_bottom
@@ -307,13 +310,26 @@ class ForceBudget:
     residual: float
 
 
-def _hill_pressure_force(pressure: np.ndarray, b_c: np.ndarray, dx: float) -> float:
-    """Streamwise pressure drag on the stair-step hill (per unit width)."""
-    heights = np.roll(b_c, -1) - b_c
-    p = np.asarray(pressure, dtype=float)
-    if p.ndim == 2:
-        p = p.mean(axis=1)
-    return float(np.sum(p * heights) * dx)
+def _hill_pressure_force(
+    pressure: np.ndarray,
+    x_u: np.ndarray,
+    y_c: np.ndarray,
+    b: np.ndarray,
+    dx: float,
+) -> float:
+    """Streamwise pressure drag on the stair-step hill (per unit width).
+
+    Each terrain step at column ``i`` exposes a vertical face of height
+    ``b(x_{i+1}) - b(x_i)``.  The fluid force from that face is ``-p dA_x``
+    (high pressure on a windward face pushes the fluid backwards), evaluated
+    with the pressure in the wall-adjacent fluid cell of that column.
+    """
+    nx = b.size
+    fluid = y_c[None, :] > b[:, None] + 1e-12
+    first = np.argmax(fluid, axis=1)
+    p_face = np.asarray(pressure, dtype=float)[np.arange(nx), first]
+    heights = np.roll(b, -1) - b
+    return float(-np.sum(p_face * heights) * dx)
 
 
 def force_balance(
@@ -328,16 +344,19 @@ def force_balance(
     """
     u = np.asarray(solution.u, dtype=float)
     pressure = np.asarray(solution.pressure, dtype=float)
-    x_c = np.asarray(solution.x_u, dtype=float) + 0.5 * float(solution.dx)
+    x_u = np.asarray(solution.x_u, dtype=float)
+    y_c = np.asarray(solution.y_c, dtype=float)
     nx, ny = u.shape
     dx = float(solution.dx)
     dy = float(solution.dy)
     height = float(getattr(solution, "height", 0.0)) or ny * dy
     length = float(getattr(solution, "length", 0.0)) or nx * dx
 
-    b_c = hill_height(x_c)
-    body = float(solution.f0) * height * length
-    pressure_hill = _hill_pressure_force(pressure, b_c, dx)
+    b_u = hill_height(x_u)
+    # f0 acts only on fluid u-cells; subtract the solid hill area.
+    solid_area = float(np.sum(y_c[None, :] < b_u[:, None] + 1e-12)) * dx * dy
+    body = float(solution.f0) * (height * length - solid_area)
+    pressure_hill = _hill_pressure_force(pressure, x_u, y_c, b_u, dx)
     lower, upper = _wall_shear_forces(solution, wall_effective_viscosity)
     shear_wall = lower + upper
 
@@ -355,32 +374,75 @@ def force_balance(
 # ---------------------------------------------------------------------------
 # Separation / reattachment from wall-shear sign changes
 # ---------------------------------------------------------------------------
+def hill_wall_diagnostics(
+    solution: object,
+    reference_profiles: Optional[Mapping[float, PeriodicHillProfile]] = None,
+    *,
+    stations: Optional[Tuple[float, ...]] = None,
+    wall_effective_viscosity: Optional[np.ndarray] = None,
+) -> Tuple[WallShearProfile, ForceBudget, List[StationObservation]]:
+    """Report local wall shear and the integral force balance *together*.
+
+    The local observable and the integral balance are independent checks of the
+    same field and must be reported side by side, never as substitutes.  Returns
+    ``(wall_shear_profile, force_budget, station_observations)``; the station
+    list is empty when no reference profiles are supplied.
+    """
+    profile = wall_shear_profile(solution, wall_effective_viscosity)
+    budget = force_balance(solution, wall_effective_viscosity)
+    observations = (
+        wall_shear_observations(
+            solution,
+            reference_profiles,
+            stations=stations,
+            wall_effective_viscosity=wall_effective_viscosity,
+        )
+        if reference_profiles
+        else []
+    )
+    return profile, budget, observations
+
+
 def separation_reattachment(solution: object) -> Tuple[Optional[float], Optional[float]]:
     """Return ``(x_sep, x_reattach)`` by linearly interpolating sign changes.
 
     The periodic cell starts at the hill crest.  Separation is the first
     positive-to-negative crossing of ``tau_w`` after the crest; reattachment is
-    the first negative-to-positive crossing after that.
+    the first negative-to-positive crossing after that.  Zero-valued nodes are
+    skipped and the last non-zero sign is carried forward, so a root landing
+    exactly on a grid node is still detected by the bracketing samples.
     """
     profile = wall_shear_profile(solution)
     x = profile.x_over_h
     tau = profile.tau_w
-    finite = np.isfinite(tau)
-    if finite.sum() < 3:
-        return None, None
-    sign = np.sign(tau)
     separation: Optional[float] = None
     reattachment: Optional[float] = None
-    for i in range(len(x) - 1):
-        if not (finite[i] and finite[i + 1]):
+    prev_sign = 0
+    prev_x = 0.0
+    prev_tau = 0.0
+    for i in range(len(x)):
+        if not math.isfinite(tau[i]):
             continue
-        if sign[i] == sign[i + 1] or sign[i] == 0 or sign[i + 1] == 0:
+        current = float(tau[i])
+        sign = 1 if current > 0.0 else (-1 if current < 0.0 else 0)
+        if sign == 0:
             continue
-        t = tau[i] / (tau[i] - tau[i + 1])
-        xc = float(x[i] + t * (x[i + 1] - x[i]))
-        if separation is None and tau[i] > 0.0 and tau[i + 1] < 0.0:
-            separation = xc
-        elif separation is not None and reattachment is None and tau[i] < 0.0 and tau[i + 1] > 0.0:
-            reattachment = xc
-            break
+        if prev_sign != 0 and sign != prev_sign:
+            if current != prev_tau:
+                xc = float(prev_x + prev_tau / (prev_tau - current) * (x[i] - prev_x))
+            else:
+                xc = float(x[i])
+            if separation is None and prev_sign > 0 and sign < 0:
+                separation = xc
+            elif (
+                separation is not None
+                and reattachment is None
+                and prev_sign < 0
+                and sign > 0
+            ):
+                reattachment = xc
+                break
+        prev_sign = sign
+        prev_x = float(x[i])
+        prev_tau = current
     return separation, reattachment

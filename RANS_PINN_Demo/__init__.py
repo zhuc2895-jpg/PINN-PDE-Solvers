@@ -98,6 +98,7 @@ from .periodic_hill_observables import (
     WallShearProfile,
     force_balance,
     friction_velocity_profile,
+    hill_wall_diagnostics,
     reference_wall_shear_fit,
     wall_shear_observations,
 )
@@ -160,6 +161,7 @@ __all__ = [
     "reference_wall_shear_fit",
     "wall_shear_observations",
     "force_balance",
+    "hill_wall_diagnostics",
     "SolveResult",
     "solve_channel",
     "wall_clustered_grid",
