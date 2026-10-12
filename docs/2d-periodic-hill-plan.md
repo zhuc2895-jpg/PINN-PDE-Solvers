@@ -305,6 +305,27 @@ r_balance = |F_body + F_pressure,hill + F_shear,wall| / max(|F_body|, |F_shear,w
 
 ## 11. 当前实现状态（2026-10-12）
 
+**可执行观测与泄漏验收：**
+
+```bash
+python -m RANS_PINN_Demo.check_periodic_hill_observations
+```
+
+该命令按第 5 节生成 20 个种子的 B1=32、B2=64 嵌套训练观测，并把所有种子、所有预算选中的参考点取并集，从评估网格中排除；验证站和测试站从不参与观测采样。训练观测只加入 1% 相对噪声，评估点保持干净。冻结协议写入
+`RANS_PINN_Demo/results/periodic_hill_observation_protocol.json`，五条声明式泄漏检查写入 `RANS_PINN_Demo/results/periodic_hill_observation_leakage.json`。任何预算不嵌套、测试站进入训练、字段越界、壁面剪应力进入训练或评估重叠都会 fail-closed。
+
+**冻结评估脚本：**
+
+```bash
+python -m RANS_PINN_Demo.evaluate_periodic_hill \
+  --protocol RANS_PINN_Demo/results/periodic_hill_observation_protocol.json \
+  --frozen-model <frozen-model.pt> \
+  --run <precomputed-frozen-run.json> \
+  --output RANS_PINN_Demo/results/periodic_hill_evaluation.json
+```
+
+该脚本只读取冻结协议、模型文件哈希和预先计算的冻结运行结果，不训练、不重选点；每份运行 JSON 必须携带与 `--frozen-model` 一致的 SHA-256。输出同站/跨站相对 L2、逐站 `tau_w` 相对误差、整体力平衡、分离/再附以及跨运行失败率。`max_iter`/`diverged` 运行被标为不可参与精度平均；收敛运行缺少分离或再附位置时 fail-closed。
+
 **可执行六门验收：**
 
 ```bash
@@ -320,7 +341,11 @@ python -m RANS_PINN_Demo.check_periodic_hill_solver
 - `RANS_PINN_Demo/fetch_periodic_hill_reference.py`：数据下载 CLI。
 - `RANS_PINN_Demo/periodic_hill_observables.py`：由解出的壁面梯度计算 `tau_w` 和 `u_tau`，并独立报告整体力平衡、分离/再附。
 - `RANS_PINN_Demo/periodic_hill_acceptance.py` 与 `check_periodic_hill_solver.py`：六项门的纯函数级判定、单次求解编排、JSON 报告和 CLI。
-- `tests/test_periodic_hill.py`、`tests/test_periodic_hill_observables.py`、`tests/test_periodic_hill_acceptance.py`：覆盖几何、参考解析、平板极限、冒烟解、可观测量和六项门阈值契约。
+- `RANS_PINN_Demo/periodic_hill_observations.py` 与 `check_periodic_hill_observations.py`：冻结站点划分、B1⊂B2 分层预算、仅训练观测噪声、跨全部种子的去泄漏评估网格、声明式训练输入/损失/评估 I/O 审计、协议读写和 CLI。
+- `RANS_PINN_Demo/periodic_hill_evaluation.py` 与 `evaluate_periodic_hill.py`：只读冻结协议/模型/预计算运行结果，报告第 5.3 与 6.4 节要求的冻结评估字段，并拒绝训练或重选点。
+- `tests/test_periodic_hill.py`、`tests/test_periodic_hill_observables.py`、`tests/test_periodic_hill_acceptance.py`、`tests/test_periodic_hill_observations.py`：覆盖几何、参考解析、平板极限、冒烟解、可观测量、六项门阈值和观测/泄漏契约。
+
+**最近一次观测协议验收结果：** 20/20 种子通过；每站维持 B1=8、B2=16；训练观测站仅为 `0.5, 1, 2, 6`；测试站观测交集为空；冻结评估网格共 804 点（测试 512、验证 256、训练站未观测 36），与任一种子、任一预算的观测无重叠。
 
 **最近一次可执行验收结果：**
 
@@ -335,4 +360,4 @@ python -m RANS_PINN_Demo.check_periodic_hill_solver
 
 逐项原始指标见 `RANS_PINN_Demo/results/periodic_hill_acceptance.json`。运行状态为 G1 `converged`、G2 `max_iter`、G3 `diverged`，因此报告的 `run_status_ok=false`；力平衡条目同时保存局部 `x/h`、`tau_w` 和推断 `u_tau`，不只用总力残差代替局部量。
 
-**结论：** 当前 stair-step + SOU + mixing-length 原型仍未通过求解器门，暂不进入 T10.5 训练。下一步仍应先修离散/边界/闭合（优先级：body-fitted 或 cut-cell 边界 > 更稳健的对流格式/隐式扩散 > k-ε/SST 基线），再重跑同一可执行验收。任何二维神经修正结果在六门全过之前都只能视为原型诊断，不能写入正式结论。
+**结论：** T10.4 的观测与泄漏协议已经冻结并可执行；但当前 stair-step + SOU + mixing-length 原型仍未通过求解器门，因此暂不进入 T10.5 训练。下一步仍应先修离散/边界/闭合（优先级：body-fitted 或 cut-cell 边界 > 更稳健的对流格式/隐式扩散 > k-ε/SST 基线），再重跑同一可执行验收。任何二维神经修正结果在六门全过之前都只能视为原型诊断，不能写入正式结论。
