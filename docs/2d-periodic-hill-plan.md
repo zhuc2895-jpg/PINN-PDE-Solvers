@@ -303,21 +303,36 @@ r_balance = |F_body + F_pressure,hill + F_shear,wall| / max(|F_body|, |F_shear,w
 
 二维的最终结论只有在独立 LES 参考、局部壁面剪应力和整体力平衡三者同时站得住时，才能写入正式开题材料。
 
-## 11. 当前实现状态（2026-10-11）
+## 11. 当前实现状态（2026-10-12）
+
+**可执行六门验收：**
+
+```bash
+python -m RANS_PINN_Demo.check_periodic_hill_solver
+```
+
+该命令先确认独立 LES 参考；若缺失则给出下载命令，再单次求解 G1/G2/G3 并复用结果检查 4.4 节六项门；平板 G1/G2 按 `Re=1` 单独求解。JSON 报告写入
+`RANS_PINN_Demo/results/periodic_hill_acceptance.json`，任一门失败或任一 G1/G2/G3 运行未达到 `converged` 时，进程退出码为 1。报告采用 fail-closed：缺少参考、非有限场、缺少分离/再附交叉点或求解器发散都不能通过。
 
 **已实现并验证：**
 
 - `RANS_PINN_Demo/periodic_hill.py`：固定几何、ERCOFTAC case-081 下载、SHA-256 校验、十个剖面解析、`wall_normal_coordinate`。
 - `RANS_PINN_Demo/fetch_periodic_hill_reference.py`：数据下载 CLI。
-- `tests/test_periodic_hill.py`：8 个测试通过，覆盖几何样条、参考解析、校验和下载路径、平板极限和二维冒烟解。
-- 独立 LES 参考数据已从 ERCOFTAC 下载并检查；站点为 0.05, 0.5, …, 8，列格式与 2 节一致。
+- `RANS_PINN_Demo/periodic_hill_observables.py`：由解出的壁面梯度计算 `tau_w` 和 `u_tau`，并独立报告整体力平衡、分离/再附。
+- `RANS_PINN_Demo/periodic_hill_acceptance.py` 与 `check_periodic_hill_solver.py`：六项门的纯函数级判定、单次求解编排、JSON 报告和 CLI。
+- `tests/test_periodic_hill.py`、`tests/test_periodic_hill_observables.py`、`tests/test_periodic_hill_acceptance.py`：覆盖几何、参考解析、平板极限、冒烟解、可观测量和六项门阈值契约。
 
-**尚未通过的 T10.2 求解器门：**
+**最近一次可执行验收结果：**
 
-- G1（48×24）在 `l_cap = 0.09 * (Ly/2)` 下得到 separation ≈ 0.75h、reattachment ≈ 4.5h，但主流剖面相对 LES 的 L2 误差约 30–50%。
-- G2（96×48）在同一闭合下出现 separation 但没有在域内检测到 reattachment；G1/G2 的分离泡长度不一致，说明当前 stair-step + SOU + mixing-length 原型的网格敏感性和分离区预测还不合格。
-- G2 在 `l_cap = 0.15 * (Ly/2)` 下数值发散。当前原型对闭合强度和网格的分辨率不足，不能直接拿来做神经修正训练。
-- 结论：**T10.2 未通过，暂不进入 T10.5 训练。** 下一步应先修求解器（建议优先级：body-fitted 或 cut-cell 边界 > k-ε/SST 基线 > 隐式扩散/更稳健的对流格式），再重新执行 4.4 节的六项门。
+| 门 | 结果 | 实测 |
+|---|---|---|
+| 1 平板极限 | PASS | G1 最大相对误差 `1.73e-3`；G2 `4.32e-4`，均 `<2%` |
+| 2 质量守恒 | FAIL | 投影后最大散度 G1 `4.27`、G2 `10.26`，阈值 `1e-6`；G3 发散 |
+| 3 周期性 | FAIL | G1/G2 的坐标与 `PeriodicHillSolver` 实际 x 导数周期滚移残差均为 0；G3 场出现非有限值 |
+| 4 分离/再附 | FAIL | G2 `x_sep=0.463` 接近 LES 参考 `0.438`，但没有检测到再附；LES 参考 `x_reattach=4.201` |
+| 5 网格敏感性 | FAIL | G2 无再附点，G3 已发散；全流体域 L2 无法比较 |
+| 6 力平衡 | FAIL | G2 `r_balance=0.9538`，阈值 `0.05` |
 
-在 T10.2 通过之前，任何二维神经修正结果都只能视为原型诊断，不能写入正式结论。
+逐项原始指标见 `RANS_PINN_Demo/results/periodic_hill_acceptance.json`。运行状态为 G1 `converged`、G2 `max_iter`、G3 `diverged`，因此报告的 `run_status_ok=false`；力平衡条目同时保存局部 `x/h`、`tau_w` 和推断 `u_tau`，不只用总力残差代替局部量。
 
+**结论：** 当前 stair-step + SOU + mixing-length 原型仍未通过求解器门，暂不进入 T10.5 训练。下一步仍应先修离散/边界/闭合（优先级：body-fitted 或 cut-cell 边界 > 更稳健的对流格式/隐式扩散 > k-ε/SST 基线），再重跑同一可执行验收。任何二维神经修正结果在六门全过之前都只能视为原型诊断，不能写入正式结论。
